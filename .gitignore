@@ -1,0 +1,42 @@
+# 构建产物
+/bin/*
+!/bin/.gitkeep
+*.exe
+
+# 测试与覆盖率产物
+coverage.out
+coverage.html
+
+# 临时/日志文件
+*.txt.tmp
+*_err.txt
+
+# 环境变量配置（含 API Key，切勿提交）
+.env
+
+# IDE / 系统文件
+.idea/
+.vscode/
+.DS_Store
+
+# 前端依赖
+/web/node_modules/
+
+# 前端构建产物（由 npm run build 生成，保留占位文件）
+/internal/server/static/dist/*
+!/internal/server/static/dist/index.html
+
+# 自动生成的类型文件
+/web/auto-imports.d.ts
+/web/components.d.ts
+
+# Go 依赖本地缓存目录（推荐通过 go.mod/sum 自动下载，切勿提交）
+/vendor/
+
+# 本地专属调试日志与运维 Log（包含敏感 LLM I/O 调用，切勿提交）
+/bin/*.log
+/bin/llm_io.log
+/bin/server.log
+
+# 本地多用户隔离会话元数据（保护用户隐私，切勿提交）
+/bin/sessions/
