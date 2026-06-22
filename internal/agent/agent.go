@@ -7,7 +7,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 
-	"trpc_agent_test/internal/calculator"
+	"trpc_agent_test/internal/tools/calculator"
 	"trpc_agent_test/internal/tools/command"
 	"trpc_agent_test/internal/tools/file"
 	"trpc_agent_test/internal/tools/web"
