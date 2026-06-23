@@ -10,6 +10,7 @@ export interface ThinkingStep {
   toolName?: string
   args?: string
   status?: 'thinking' | 'running' | 'success' | 'error'
+  approval?: { id: string; toolName: string; arguments: string }
 }
 
 export interface Message {
@@ -35,14 +36,45 @@ function getCurrentTime() {
 
 export const useChatStore = defineStore('chat', () => {
   const localSessions = localStorage.getItem('trpc_agent_sessions')
-  const localMessagesMap = localStorage.getItem('trpc_agent_messages_map')
   const localCurrentSessionId = localStorage.getItem('trpc_agent_current_id')
+
+  // 僵尸打字态物理清洗自愈防御：
+  // 在初始化载入 local 缓存时，所有的历史会话消息在逻辑上绝对不应该处于流式打字中（streaming: true）。
+  // 如果因为之前网络崩溃、服务关停、用户中途重启导致流未正常结束（即没有触发 onDone 闭合），
+  // 我们在此行强行将所有历史消息的 streaming 置为 false，优雅绝杀任何残留的跳动光标。
+  const parseLocalMessagesMap = (): Record<string, Message[]> => {
+    const raw = localStorage.getItem('trpc_agent_messages_map')
+    if (!raw) return {}
+    try {
+      const parsed = JSON.parse(raw) as Record<string, Message[]>
+      Object.keys(parsed).forEach(sid => {
+        if (parsed[sid]) {
+          parsed[sid].forEach(msg => {
+            if (msg.streaming) {
+              msg.streaming = false
+            }
+            if (msg.steps) {
+              msg.steps.forEach(step => {
+                if (step.status === 'thinking' || step.status === 'running') {
+                  step.status = 'success'
+                }
+              })
+            }
+          })
+        }
+      })
+      return parsed
+    } catch {
+      return {}
+    }
+  }
 
   const sessions = ref<Session[]>(localSessions ? JSON.parse(localSessions) : [])
   const currentSessionId = ref<string | null>(localCurrentSessionId || null)
-  const messagesMap = ref<Record<string, Message[]>>(localMessagesMap ? JSON.parse(localMessagesMap) : {})
+  const messagesMap = ref<Record<string, Message[]>>(parseLocalMessagesMap())
   const busy = ref(false)
   const sidebarCollapsed = ref(false)
+  const currentApproval = ref<{ id: string; tool_name: string; arguments: string } | null>(null)
 
   // 深度 watch 自动写入 localStorage，防止重新部署和刷新后清空任务列表与聊天
   watch(sessions, (newVal) => {
@@ -181,6 +213,7 @@ export const useChatStore = defineStore('chat', () => {
               })
             }
             aiMsg.steps = [...steps] // 解构重分配，强制触发 Vue 3 深度响应式重绘
+            messagesMap.value[sid] = [...messagesMap.value[sid]] // 彻底唤醒深层响应式，瞬间触发组件刷新
           },
           onObservation: (data) => {
             if (!aiMsg.steps) aiMsg.steps = []
@@ -199,6 +232,49 @@ export const useChatStore = defineStore('chat', () => {
               })
             }
             aiMsg.steps = [...steps] // 解构重分配，强制触发 Vue 3 深度响应式重绘
+            messagesMap.value[sid] = [...messagesMap.value[sid]] // 彻底唤醒深层响应式，瞬间触发组件刷新
+          },
+          onApprovalRequest: (data) => {
+            console.log('[DEBUG APPROVAL] 收到后端审批事件:', data)
+            currentApproval.value = data
+            if (!aiMsg.steps) aiMsg.steps = []
+            const steps = aiMsg.steps
+            const last = steps[steps.length - 1]
+            if (last && last.status === 'thinking') {
+              last.status = 'success'
+            }
+            
+            // 寻找当前最靠近尾部的 type === 'tool' 的 step (也就是正在申请审批的这个工具)
+            const idx = [...steps].reverse().findIndex(s => s.type === 'tool')
+            if (idx !== -1) {
+              const realIndex = steps.length - 1 - idx
+              console.log('[DEBUG APPROVAL] 已成功定位并关联工具步骤, 索引:', realIndex, steps[realIndex].toolName)
+              steps[realIndex] = {
+                ...steps[realIndex],
+                approval: {
+                  id: data.id,
+                  toolName: data.tool_name,
+                  arguments: data.arguments
+                }
+              }
+            } else {
+              console.log('[DEBUG APPROVAL] 未找到已有的工具步骤，走兜底 push 新卡片')
+              steps.push({
+                id: data.id,
+                type: 'tool',
+                toolName: data.tool_name,
+                args: data.arguments,
+                status: 'running',
+                content: '',
+                approval: {
+                  id: data.id,
+                  toolName: data.tool_name,
+                  arguments: data.arguments
+                }
+              })
+            }
+            aiMsg.steps = [...steps] // 解构重分配，强制触发 Vue 3 深度响应式重绘
+            messagesMap.value[sid] = [...messagesMap.value[sid]] // 彻底唤醒深层响应式，瞬间触发组件刷新
           },
           onUsage: (usage) => {
             aiMsg.usage = usage
@@ -237,6 +313,47 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  async function respondApproval(approve: boolean, approvalId?: string) {
+    const id = approvalId || (currentApproval.value ? currentApproval.value.id : null)
+    if (!id) return
+
+    if (currentApproval.value && currentApproval.value.id === id) {
+      currentApproval.value = null // 瞬间重置
+    }
+
+    // 遍历所有消息的步骤，把匹配到的 approval 信息清除，并写入温馨的操作提示
+    Object.keys(messagesMap.value).forEach(sid => {
+      if (messagesMap.value[sid]) {
+        messagesMap.value[sid].forEach(msg => {
+          if (msg.steps) {
+            const steps = [...msg.steps]
+            let changed = false
+            for (let i = 0; i < steps.length; i++) {
+              if (steps[i].approval && steps[i].approval?.id === id) {
+                steps[i] = {
+                  ...steps[i],
+                  content: approve ? '⚡ 已批准，正在执行动作...' : '❌ 已拒绝，取消动作执行',
+                  status: approve ? steps[i].status : 'error',
+                  approval: undefined
+                }
+                changed = true
+              }
+            }
+            if (changed) {
+              msg.steps = steps // 重新分配数组引用，100% 触发重绘
+            }
+          }
+        })
+      }
+    })
+
+    try {
+      await api.respondApproval(id, approve)
+    } catch {
+      // 容错
+    }
+  }
+
   function toggleSidebar() {
     sidebarCollapsed.value = !sidebarCollapsed.value
   }
@@ -249,6 +366,8 @@ export const useChatStore = defineStore('chat', () => {
     sidebarCollapsed,
     currentMessages,
     sessionCount,
+    currentApproval,
+    respondApproval,
     fetchSessions,
     createSession,
     deleteSession,

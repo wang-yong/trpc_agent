@@ -15,6 +15,16 @@ type CommandInput struct {
 	Command string `json:"command" description:"要在当前工作区执行的终端命令（非交互式，例如 'go version', 'npm run build'）"`
 }
 
+// 跨包 context key 映射
+const (
+	ApprovalManagerKey = "approval_manager"
+)
+
+// 隐式接口定义，避免包循环导入依赖
+type approvalManager interface {
+	RequestApproval(ctx context.Context, toolName string, arguments string) bool
+}
+
 // CommandOutput 是运行命令工具的出参
 type CommandOutput struct {
 	Command  string `json:"command"`
@@ -30,6 +40,18 @@ func RunCommand(ctx context.Context, input *CommandInput) (CommandOutput, error)
 	cmdStr := strings.TrimSpace(input.Command)
 	if cmdStr == "" {
 		return CommandOutput{Success: false, Message: "命令不能为空"}, nil
+	}
+
+	// 人机协同安全网拦截：如果上下文注入了审批管理器，进行阻塞式审批挂起
+	if mgr, ok := ctx.Value(ApprovalManagerKey).(approvalManager); ok {
+		approved := mgr.RequestApproval(ctx, "run_command", cmdStr)
+		if !approved {
+			return CommandOutput{
+				Command:  cmdStr,
+				Success:  false,
+				Message:  "安全防护拦截：用户在前端弹窗中点击了[拒绝]，此高危终端指令被强行硬性拦截终止，未执行任何本地物理代码！",
+			}, nil
+		}
 	}
 
 	// 1. 安全防护防线：禁止执行某些具有超强毁灭性或不可逆的系统根目录删除格式化指令

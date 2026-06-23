@@ -42,9 +42,9 @@
 
 ---
 
-## 🚀 阶段三：自研高级开发工具链与安全网 - **🟡 进行中 (已完成 25%)**
+## 🚀 阶段三：自研高级开发工具链与安全网 - **🟡 进行中 (已完成 50%)**
 - [x] **王牌检索**：`grep_search` 全局正文行级关键字极速匹配（类似 Ripgrep，带 50 条上限保护防爆，自动忽略二进制大文件）
-- [ ] **安全防护 (Human-in-the-Loop)**：`notify_approval` 机制。当模型调度写文件/改文件/执行 cmd 等高危动作时，挂起 SSE 并在前端弹出阻断确认框，必须用户点击“允许”方可物理派发
+- [x] **安全防护 (Human-in-the-Loop)**：`notify_approval` 机制。当模型调度写文件/改文件/执行 cmd 等高危动作时，挂起 SSE 并在前端弹出阻断确认框，必须用户点击“允许”方可物理派发
 - [ ] **代码协作**：`git_commit_helper` 工具。自动执行 git status / git diff 析出代码变更，并 100% 自动按照 Conventional Commit 规范生成并提交 Git Commit
 - [ ] **浏览器自动化**：`integrated_browser` 终端执行。集成无头 ChromeDP / Playwright 支持自动爬网、登录及动态 Web 交互自测
 

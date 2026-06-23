@@ -8,11 +8,48 @@ const chat = useChatStore()
 
 const data = ref<TokenStats | null>(null)
 const loading = ref(false)
-const currentTab = ref<'product' | 'model'>('product' as const)
+const currentTab = ref<'daily' | 'product' | 'model'>('daily' as const)
 const pageSize = ref(25)
 const currentPage = ref(1)
 const sortField = ref<string>('timestamp')
 const sortDir = ref<'asc' | 'desc'>('desc')
+
+// ====== 按天（每日维度）统计 Token 消耗 ======
+const dailyStats = computed(() => {
+  const map: Record<string, { date: string, count: number, prompt: number, completion: number, total: number, cost: number }> = {}
+
+  recent.value.forEach(r => {
+    // 转换为 YYYY-MM-DD
+    const d = new Date(r.timestamp * 1000)
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const dateStr = String(d.getDate()).padStart(2, '0')
+    const key = `${year}-${month}-${dateStr}`
+
+    const cost = calcCost(r.model, r.prompt_tokens, r.completion_tokens)
+
+    if (!map[key]) {
+      map[key] = {
+        date: key,
+        count: 0,
+        prompt: 0,
+        completion: 0,
+        total: 0,
+        cost: 0
+      }
+    }
+
+    const item = map[key]
+    item.count++
+    item.prompt += r.prompt_tokens
+    item.completion += r.completion_tokens
+    item.total += r.total_tokens
+    item.cost += cost
+  })
+
+  // 转换成列表并按日期降序
+  return Object.values(map).sort((a, b) => b.date.localeCompare(a.date))
+})
 
 const summary = computed(() => data.value?.summary || { total_requests: 0, total_prompt: 0, total_completion: 0, total_tokens: 0 })
 const byModel = computed(() => data.value?.by_model || [])
@@ -120,6 +157,7 @@ onMounted(() => loadStats())
         <div class="section-head">
           <h3 class="section-title">使用汇总</h3>
           <div class="section-tabs">
+            <button :class="{ active: currentTab === 'daily' }" @click="switchTab('daily')">每日消耗</button>
             <button :class="{ active: currentTab === 'product' }" @click="switchTab('product')">产品使用</button>
             <button :class="{ active: currentTab === 'model' }" @click="switchTab('model')">模型使用</button>
           </div>
@@ -132,7 +170,25 @@ onMounted(() => loadStats())
         </div>
 
         <div class="table-wrap">
-          <table v-if="currentTab === 'model'">
+          <!-- 每日消耗统计表格 -->
+          <table v-if="currentTab === 'daily'">
+            <thead>
+              <tr><th>日期</th><th>请求次数</th><th>输入 TOKENS</th><th>输出 TOKENS</th><th>总 TOKENS</th><th>费用</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="d in dailyStats" :key="d.date">
+                <td><span class="date-tag">{{ d.date }}</span></td>
+                <td class="num">{{ d.count }} 次</td>
+                <td class="num">{{ fmtNum(d.prompt) }}</td>
+                <td class="num">{{ fmtNum(d.completion) }}</td>
+                <td class="num bold">{{ fmtNum(d.total) }}</td>
+                <td class="num price">&yen;{{ d.cost.toFixed(4) }}</td>
+              </tr>
+              <tr v-if="dailyStats.length === 0"><td colspan="6" class="no-data">暂无数据</td></tr>
+            </tbody>
+          </table>
+
+          <table v-else-if="currentTab === 'model'">
             <thead>
               <tr><th>模型</th><th>请求次数</th><th>输入 TOKENS</th><th>输出 TOKENS</th><th>总 TOKENS</th><th>费用</th></tr>
             </thead>
@@ -480,5 +536,14 @@ tr:hover td { background: var(--hover-color); }
   .quota-card { padding: 16px 18px; }
   .section-head { padding: 12px 14px; }
   th, td { padding: 9px 12px; }
+}
+
+.date-tag {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 11.5px;
 }
 </style>

@@ -99,7 +99,7 @@ const lastUsageInfo = computed(() => {
   for (let i = msgs.length - 1; i >= 0; i--) {
     if (msgs[i].usage) {
       const u = msgs[i].usage!
-      const limit = 32000 // 假设标准大模型默认 32k 限制
+      const limit = 1000000 // 上行 1M (1,000,000) 限制
       const pct = Math.min(Math.round((u.total_tokens / limit) * 100), 100)
       return { pct, total: u.total_tokens }
     }
@@ -234,26 +234,6 @@ const lastUsageInfo = computed(() => {
 
     <!-- 三栏布局的主体右侧：Trae 风格的 Context & Tasks 侧边面板 -->
     <aside class="chat-right-panel">
-      <!-- 1. 待办事项区块 -->
-      <div class="panel-section">
-        <h3 class="section-title">待办</h3>
-        <div v-if="activeTodoSteps.length > 0" class="todo-list">
-          <div v-for="(todo, i) in activeTodoSteps" :key="i" class="todo-item">
-            <span class="todo-bullet pulsing"></span>
-            <span class="todo-name">{{ todo.name }}</span>
-          </div>
-        </div>
-        <div v-else class="empty-state">
-          <div class="empty-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-          </div>
-          <div class="empty-text">暂无待办</div>
-          <div class="empty-desc">复杂任务的执行进展会显示在这里</div>
-        </div>
-      </div>
-
-      <div class="panel-divider"></div>
-
       <!-- 2. 上下文利用率区块 -->
       <div class="panel-section">
         <div class="section-header-row">
@@ -306,6 +286,7 @@ const lastUsageInfo = computed(() => {
         </div>
       </div>
     </aside>
+
   </div>
 </template>
 
@@ -871,4 +852,11 @@ const lastUsageInfo = computed(() => {
   .title-text { font-size: 24px; }
   .glow-1, .glow-2 { width: 220px; height: 220px; }
 }
+
+/* ===== 4. 高危人机协作审批阻断弹窗 (HITL Glass-Modal) ===== */
+
+
+/* fade transition */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

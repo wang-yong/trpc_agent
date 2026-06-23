@@ -63,5 +63,43 @@ const md = new MarkdownIt({
 })
 
 export function renderMarkdown(text: string): string {
-  return md.render(text)
+  if (!text) return ''
+
+  // 先正常渲染得到干净的 HTML
+  let html = md.render(text)
+
+  // 1. 块级公式自愈：支持 \[ ... \] 和 $$ ... $$
+  html = html.replace(/\\\[([\s\S]*?)\\\]|\$\$([\s\S]*?)\$\$/g, (match, p1, p2) => {
+    const formula = p1 || p2
+    if (!formula) return match
+
+    const clean = formula
+      .replace(/\\times/g, ' × ')
+      .replace(/\\div/g, ' ÷ ')
+      .replace(/\\cdot/g, ' · ')
+      .replace(/\\text\{([\s\S]*?)\}/g, '$1') // 剥离 \text{...}
+      .replace(/\\text/g, '')
+      .replace(/\\/g, '') // 剥离反斜杠
+      .replace(/[\{\}]/g, '') // 剥除剩下的孤立大括号
+      .trim()
+
+    return `<div class="math-block-card"><span class="math-badge">公式</span><span class="math-content">${clean}</span></div>`
+  })
+
+  // 2. 行内公式自愈：支持 \( ... \) 和 $ ... $
+  html = html.replace(/\\\(([\s\S]*?)\\\)|\$([^\$]+?)\$/g, (match, p1, p2) => {
+    const formula = p1 || p2
+    if (!formula) return match
+
+    const clean = formula
+      .replace(/\\times/g, ' × ')
+      .replace(/\\text\{([\s\S]*?)\}/g, '$1')
+      .replace(/\\text/g, '')
+      .replace(/\\/g, '')
+      .replace(/[\{\}]/g, '')
+      .trim()
+    return `<span class="math-inline-tag">${clean}</span>`
+  })
+
+  return html
 }

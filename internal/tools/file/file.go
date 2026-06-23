@@ -17,6 +17,16 @@ type ListDirInput struct {
 	Path string `json:"path" description:"要浏览的目录路径（相对路径，如 . 或 ./web，严禁超出工作区范围）"`
 }
 
+// 跨包 context key 映射
+const (
+	ApprovalManagerKey = "approval_manager"
+)
+
+// 隐式接口定义，避免包循环导入依赖
+type approvalManager interface {
+	RequestApproval(ctx context.Context, toolName string, arguments string) bool
+}
+
 // FileInfo 结构化的文件和目录信息。
 type FileInfo struct {
 	Name  string `json:"name"`
@@ -181,6 +191,17 @@ func WriteFileContent(ctx context.Context, input WriteFileInput) (WriteFileOutpu
 		return WriteFileOutput{Success: false, Message: err.Error()}, nil
 	}
 
+	// 人机协同安全网拦截：如果上下文注入了审批管理器，进行阻塞式审批挂起
+	if mgr, ok := ctx.Value(ApprovalManagerKey).(approvalManager); ok {
+		approved := mgr.RequestApproval(ctx, "write_file", fmt.Sprintf("写入文件: %s", input.Path))
+		if !approved {
+			return WriteFileOutput{
+				Success: false,
+				Message: "安全防护拦截：用户在前端弹窗中点击了[拒绝]，此高危写盘指令被强行硬性拦截终止，未执行任何物理写盘！",
+			}, nil
+		}
+	}
+
 	// 确保父目录存在
 	dir := filepath.Dir(safePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -203,6 +224,17 @@ func EditFileContent(ctx context.Context, input EditFileInput) (EditFileOutput, 
 	safePath, err := ensureSafePath(input.Path)
 	if err != nil {
 		return EditFileOutput{Success: false, Message: err.Error()}, nil
+	}
+
+	// 人机协同安全网拦截：如果上下文注入了审批管理器，进行阻塞式审批挂起
+	if mgr, ok := ctx.Value(ApprovalManagerKey).(approvalManager); ok {
+		approved := mgr.RequestApproval(ctx, "edit_file", fmt.Sprintf("精密修改文件: %s", input.Path))
+		if !approved {
+			return EditFileOutput{
+				Success: false,
+				Message: "安全防护拦截：用户在前端弹窗中点击了[拒绝]，此高危修改文件指令被强行硬性拦截终止，未修改任何物理代码文件！",
+			}, nil
+		}
 	}
 
 	contentBytes, err := os.ReadFile(safePath)

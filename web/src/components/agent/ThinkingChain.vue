@@ -1,12 +1,19 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { ThinkingStep } from '@/stores/chat'
+import { useChatStore } from '@/stores/chat'
 
 const props = defineProps<{
   steps?: ThinkingStep[]
 }>()
 
+const chatStore = useChatStore()
+
 const expanded = ref(true)
+
+function handleInlineRespond(approve: boolean, id: string) {
+  chatStore.respondApproval(approve, id)
+}
 
 const activeSteps = computed(() => props.steps || [])
 const hasSteps = computed(() => activeSteps.value.length > 0)
@@ -99,6 +106,33 @@ function formatJson(val?: string) {
                 <div v-if="step.args" class="io-block args">
                   <span class="block-label">输入参数 (Arguments)</span>
                   <pre><code>{{ formatJson(step.args) }}</code></pre>
+                </div>
+                <!-- 动作审批确认 -->
+                <div v-if="step.approval" class="io-block inline-approval">
+                  <div class="approval-title-row">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.5">
+                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                      <line x1="12" y1="9" x2="12" y2="13"/>
+                      <line x1="12" y1="17" x2="12.01" y2="17"/>
+                    </svg>
+                    <span class="approval-header-text">安全审批请求</span>
+                  </div>
+                  <p class="approval-desc">
+                    AI 正在申请在本地电脑上执行高危动作：
+                  </p>
+                  <div class="approval-detail-arguments">
+                    <code>{{ step.approval.arguments }}</code>
+                  </div>
+                  <div class="approval-actions">
+                    <button class="inline-btn reject" @click="handleInlineRespond(false, step.approval.id)">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                      拒绝
+                    </button>
+                    <button class="inline-btn approve" @click="handleInlineRespond(true, step.approval.id)">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      允许
+                    </button>
+                  </div>
                 </div>
                 <!-- 物理运行结果 -->
                 <div v-if="step.content" class="io-block observation">
@@ -317,6 +351,80 @@ code {
 .observation pre.term {
   border-left: 2.5px solid #10b981;
   padding-left: 8px;
+}
+
+/* ===== Inline Approval ===== */
+.inline-approval {
+  border: 1px dashed #f59e0b !important;
+  background: rgba(245, 158, 11, 0.03) !important;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.approval-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.approval-header-text {
+  font-size: 12px;
+  font-weight: 700;
+  color: #d97706;
+}
+.approval-desc {
+  font-size: 12px;
+  color: var(--text-color-2);
+  margin: 0 0 8px 0;
+  line-height: 1.5;
+}
+.approval-detail-arguments {
+  background: var(--card-color);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-color-1);
+  margin-bottom: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.approval-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.inline-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.inline-btn.reject {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-color-3);
+}
+.inline-btn.reject:hover {
+  background: var(--hover-color);
+  color: var(--text-color-2);
+}
+.inline-btn.approve {
+  background: #f59e0b;
+  border: 1px solid #d97706;
+  color: #fff;
+  transition: background 0.1s ease;
+}
+.inline-btn.approve:hover {
+  background: #d97706;
 }
 
 /* Expand Transition */

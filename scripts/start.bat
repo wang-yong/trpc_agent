@@ -39,8 +39,19 @@ if !errorlevel!==0 (
     exit /b 1
 )
 
+REM 构建前端 Web (Vue 3)
+echo [1/3] 正在全自动编译打包 Vue 3 现代前端...
+cd /d web
+call npm run build
+if !errorlevel! neq 0 (
+    echo [错误] 前端打包编译失败！请检查 web 目录。
+    cd /d ..
+    exit /b 1
+)
+cd /d ..
+
 REM 构建服务
-echo [1/2] 构建 Web 服务程序...
+echo [2/3] 构建后端 Go 程序 (自动嵌入最新前端网页)...
 go build -o bin\trpc_agent_server.exe ./cmd/server
 if !errorlevel! neq 0 (
     echo [错误] 构建失败！
@@ -48,7 +59,7 @@ if !errorlevel! neq 0 (
 )
 
 REM 后台启动服务（日志重定向到文件）
-echo [2/2] 启动 Web 服务...
+echo [3/3] 启动 Web 服务...
 start "trpc_agent_server" /B bin\trpc_agent_server.exe > bin\server.log 2>&1
 
 REM 等待服务就绪（用 ping 替代 timeout，避免输入重定向报错）

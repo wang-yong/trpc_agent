@@ -103,7 +103,7 @@ function handleNewTask() {
 
 <style scoped>
 .sidebar {
-  height: 100%;
+  height: 100vh; /* 强力、100% 顶天立地贴合屏幕最底端，避免任何父级高度塌陷 */
   display: flex; flex-direction: column;
   /* 侧边栏比主内容略深，形成层次 */
   background: var(--body-color);

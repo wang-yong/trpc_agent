@@ -89,6 +89,8 @@ export const api = {
   deleteSession: (id: string) =>
     request<{ ok: boolean }>(`/api/sessions?id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
   getTokenStats: () => request<TokenStats>('/api/token-stats'),
+  respondApproval: (id: string, approve: boolean) =>
+    request<{ ok: boolean }>('/api/approvals/respond', { method: 'POST', body: JSON.stringify({ id, approve }) }),
 }
 
 /** SSE 流式聊天 */
@@ -104,6 +106,7 @@ export interface SSEHandlers {
   onThought?: (content: string) => void
   onToolCall?: (toolCall: { id: string; name: string; arguments: string }) => void
   onObservation?: (observation: { id: string; name: string; content: string }) => void
+  onApprovalRequest?: (approval: { id: string; tool_name: string; arguments: string }) => void
   onUsage: (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void
   onError: (msg: string) => void
   onDone: () => void
@@ -157,6 +160,8 @@ function handleSSEEvent(chunk: string, handlers: SSEHandlers) {
     handlers.onToolCall?.(data)
   } else if (event === 'observation') {
     handlers.onObservation?.(data)
+  } else if (event === 'approval_request') {
+    handlers.onApprovalRequest?.(data)
   } else if (event === 'usage') {
     handlers.onUsage(data)
   } else if (event === 'error') {
