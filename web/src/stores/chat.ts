@@ -163,7 +163,12 @@ export const useChatStore = defineStore('chat', () => {
     messagesMap.value[sid].push(aiMsg)
 
     busy.value = true
-    let answer = ''
+    
+    // ====== 【液态打字缓冲器】核心自愈状态定义 ======
+    const typingQueue: string[] = []
+    let renderedText = ''
+    let typingTimer: ReturnType<typeof setInterval> | null = null
+    let streamEnded = false
 
     try {
       await streamChat(
@@ -175,8 +180,52 @@ export const useChatStore = defineStore('chat', () => {
         },
         {
           onDelta: (content) => {
-            answer += content
-            aiMsg.content = answer
+            // 将接收到的多字符分片依次推入待打印队列
+            for (const char of content) {
+              typingQueue.push(char)
+            }
+
+            // 启动平滑打字心跳定时器
+            if (!typingTimer) {
+              const speed = settings.typingSpeed !== undefined ? settings.typingSpeed : 20
+              
+              // 如果速度设为 0，代表不限速，直接自愈回直出
+              if (speed === 0) {
+                typingQueue.forEach(char => renderedText += char)
+                typingQueue.length = 0
+                aiMsg.content = renderedText
+                messagesMap.value[sid] = [...messagesMap.value[sid]]
+                return
+              }
+
+              typingTimer = setInterval(() => {
+                if (typingQueue.length > 0) {
+                  // 动态积压加速保护机制：
+                  // 如果队列中积存的待打字符过多，为避免打字进度延迟过大产生割裂，
+                  // 自动以阶梯倍速一次性吐出更多字，确保极高频时的顺畅实时自愈！
+                  let charsToTake = 1
+                  if (typingQueue.length > 80) charsToTake = 5
+                  else if (typingQueue.length > 30) charsToTake = 2
+
+                  for (let i = 0; i < charsToTake; i++) {
+                    const char = typingQueue.shift()
+                    if (char !== undefined) {
+                      renderedText += char
+                    }
+                  }
+                  aiMsg.content = renderedText
+                  messagesMap.value[sid] = [...messagesMap.value[sid]] // 强刷 Vue 3 重绘
+                } else if (streamEnded) {
+                  // 彻底吐完，且后端也已经物理闭环，打字机优雅收工消退！
+                  if (typingTimer) {
+                    clearInterval(typingTimer)
+                    typingTimer = null
+                  }
+                  aiMsg.streaming = false
+                  messagesMap.value[sid] = [...messagesMap.value[sid]]
+                }
+              }, speed)
+            }
           },
           onThought: (content) => {
             if (!aiMsg.steps) aiMsg.steps = []
@@ -276,6 +325,9 @@ export const useChatStore = defineStore('chat', () => {
             aiMsg.steps = [...steps] // 解构重分配，强制触发 Vue 3 深度响应式重绘
             messagesMap.value[sid] = [...messagesMap.value[sid]] // 彻底唤醒深层响应式，瞬间触发组件刷新
           },
+          onWorkspaceUpdated: (data) => {
+            window.dispatchEvent(new CustomEvent('workspace-updated', { detail: data }))
+          },
           onUsage: (usage) => {
             aiMsg.usage = usage
           },
@@ -284,16 +336,27 @@ export const useChatStore = defineStore('chat', () => {
             aiMsg.content = '出错了：' + msg
           },
           onDone: () => {
-            aiMsg.streaming = false
+            streamEnded = true
+            
+            // 如果打字速度为 0 (不限流)，或者本来打字队列里就没积压字符，则立刻秒速完成
+            if (settings.typingSpeed === 0 || typingQueue.length === 0) {
+              if (typingTimer) {
+                clearInterval(typingTimer)
+                typingTimer = null
+              }
+              aiMsg.streaming = false
+              if (!renderedText.trim()) {
+                aiMsg.content = '(无内容返回)'
+              }
+              messagesMap.value[sid] = [...messagesMap.value[sid]]
+            }
+
             if (aiMsg.steps) {
               aiMsg.steps.forEach(s => {
                 if (s.status === 'thinking' || s.status === 'running') {
                   s.status = 'success'
                 }
               })
-            }
-            if (!answer.trim()) {
-              aiMsg.content = '(无内容返回)'
             }
           },
         }

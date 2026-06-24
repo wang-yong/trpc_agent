@@ -109,6 +109,30 @@ watch(() => settings.theme, (newTheme) => {
   }
 }, { immediate: true })
 
+function initLeftResize(e: MouseEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startWidth = settings.sidebarWidth
+
+  document.body.classList.add('is-resizing')
+
+  const handleMouseMove = (moveEvent: MouseEvent) => {
+    const diffX = moveEvent.clientX - startX
+    const newWidth = startWidth + diffX
+    // 彻底解禁拉伸限制！只保留 20px 极简物理安全防负值崩溃兜底
+    settings.updateSidebarWidth(Math.max(20, newWidth))
+  }
+
+  const handleMouseUp = () => {
+    document.removeEventListener('mousemove', handleMouseMove)
+    document.removeEventListener('mouseup', handleMouseUp)
+    document.body.classList.remove('is-resizing')
+  }
+
+  document.addEventListener('mousemove', handleMouseMove)
+  document.addEventListener('mouseup', handleMouseUp)
+}
+
 onMounted(async () => {
   try {
     await Promise.all([settings.fetchModels(), settings.fetchSkills()])
@@ -127,13 +151,16 @@ onMounted(async () => {
           <NLayoutSider
             v-if="!chat.sidebarCollapsed"
             bordered
-            :width="268"
+            :width="settings.sidebarWidth"
             :native-scrollbar="false"
             collapse-mode="width"
             class="app-sider"
           >
             <TheSidebar />
           </NLayoutSider>
+          <!-- 左侧面板原生拖拽手柄条 -->
+          <div v-if="!chat.sidebarCollapsed" class="resize-handle-left" @mousedown="initLeftResize"></div>
+
           <NLayoutContent class="app-content">
             <RouterView />
           </NLayoutContent>
@@ -145,7 +172,7 @@ onMounted(async () => {
 
 <style scoped>
 .app-layout { height: 100vh; background: var(--body-color); }
-.app-sider { height: 100vh; background: var(--body-color); border-right: 1px solid var(--border-color); }
+.app-sider { height: 100vh; background: var(--body-color); border-right: 1px solid var(--border-color); position: relative; }
 .app-sider :deep(.n-layout-sider-scroll-container) {
   display: flex;
   flex-direction: column;
@@ -155,5 +182,23 @@ onMounted(async () => {
   height: 100vh;
   display: flex; flex-direction: column;
   background: var(--body-color);
+}
+
+/* ===== 左侧 Sider 拖拽手柄原生实现 ===== */
+.resize-handle-left {
+  width: 6px;
+  background: transparent;
+  cursor: col-resize !important;
+  z-index: 100;
+  position: relative;
+  margin-left: -3px; /* 完美重合 Sider 与 Content 的分界线 */
+  margin-right: -3px;
+  flex-shrink: 0;
+  transition: background 0.2s ease, opacity 0.2s ease;
+}
+.resize-handle-left:hover,
+body.is-resizing .resize-handle-left {
+  background: var(--primary-color) !important;
+  opacity: 0.5 !important;
 }
 </style>

@@ -83,15 +83,48 @@ body {
 .md-body hr { border: none; border-top: 1px solid var(--border-color); margin: 16px 0; }
 
 /* ===== Typing Cursor ===== */
-.typing-cursor::after {
-  content: "▍";
-  color: var(--primary-color);
-  animation: cursor-blink 1s steps(2) infinite;
+.typing-cursor {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 5px;
+  width: 4px;
+  height: 15px;
+  background: linear-gradient(135deg, var(--primary-color) 0%, #b794f6 100%);
+  border-radius: 4px;
+  animation: cursor-breath 0.75s ease-in-out infinite alternate;
+  box-shadow: 0 0 6px var(--primary-color);
 }
-@keyframes cursor-blink { to { opacity: 0; } }
+@keyframes cursor-breath {
+  0% {
+    opacity: 0.15;
+    transform: scaleY(0.85);
+    box-shadow: 0 0 2px var(--primary-color);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleY(1.1);
+    box-shadow: 0 0 10px var(--primary-color), 0 0 4px #b794f6;
+  }
+}
 
 /* ===== Selection ===== */
 ::selection { background: rgba(91,141,239,.25); color: inherit; }
 
 /* ===== Focus Visible ===== */
 :focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+
+/* ===== AI 消息组自愈淡入滑入动画 ===== */
+.ai-msg-group {
+  animation: msg-slide-up 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes msg-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

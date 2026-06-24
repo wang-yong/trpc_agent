@@ -1,9 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -12,7 +18,146 @@ import (
 	"trpc_agent_test/internal/server"
 )
 
+// model 包引入
+import modelpkg "trpc.group/trpc-go/trpc-agent-go/model"
+
+// LoggingReadCloser 同步、零卡顿地将大模型流式 SSE 字节流复制写入日志文件（TeeReader 机制）
+type LoggingReadCloser struct {
+	original  io.ReadCloser
+	tee       io.Reader
+	logFile   *os.File
+	server    *server.Server
+	sessionID string
+}
+
+func (l *LoggingReadCloser) Read(p []byte) (n int, err error) {
+	n, err = l.tee.Read(p)
+	if n > 0 && l.server != nil && l.sessionID != "" {
+		chunk := string(p[:n])
+		// 1.5s 零阻塞极速嗅探：通过定位 "usage" 直接取出 SiliconFlow 吐回的最真实的单次用量，过滤底层库自带的全局累加污染
+		if idx := strings.Index(chunk, `"usage"`); idx != -1 {
+			sub := chunk[idx:]
+			prompt := extractInt(sub, `"prompt_tokens"`)
+			comp := extractInt(sub, `"completion_tokens"`)
+			total := extractInt(sub, `"total_tokens"`)
+			if prompt > 0 {
+				l.server.SetRealUsage(l.sessionID, &modelpkg.Usage{
+					PromptTokens:     prompt,
+					CompletionTokens: comp,
+					TotalTokens:      total,
+				})
+			}
+		}
+	}
+	return n, err
+}
+
+func (l *LoggingReadCloser) Close() error {
+	err := l.original.Close()
+	if l.logFile != nil {
+		_, _ = l.logFile.WriteString("\n=== [LLM TRANSACTION DONE] ===\n\n")
+		_ = l.logFile.Close()
+	}
+	return err
+}
+
+// extractInt 用于从子串中以绝对 0-CPU 额外开销的姿态快速抠出指定的数字
+func extractInt(str, key string) int {
+	idx := strings.Index(str, key)
+	if idx == -1 {
+		return 0
+	}
+	sub := str[idx+len(key):]
+	start := -1
+	for i, c := range sub {
+		if c >= '0' && c <= '9' {
+			if start == -1 {
+				start = i
+			}
+		} else if start != -1 {
+			var val int
+			_, _ = fmt.Sscanf(sub[start:i], "%d", &val)
+			return val
+		}
+	}
+	return 0
+}
+
+// LoggingRoundTripper 拦截 http.DefaultTransport 传输层，极速拦截、解析大模型接口交互
+type LoggingRoundTripper struct {
+	Proxied http.RoundTripper
+}
+
+func (l *LoggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if l.Proxied == nil {
+		l.Proxied = http.DefaultTransport
+	}
+
+	// 智能断属：判断当前 HTTP 交互是否属于硅基流动、OpenAI 或者是其他的 Chat API 的上行通信
+	isLLM := strings.Contains(req.URL.Host, "siliconflow") || strings.Contains(req.URL.Host, "openai") || strings.Contains(req.URL.Path, "/chat/completions")
+
+	var reqBodyBytes []byte
+	if isLLM && req.Body != nil {
+		var err error
+		reqBodyBytes, err = io.ReadAll(req.Body)
+		if err == nil {
+			// 一定要回写 Body，否则后续库就无法读取了
+			req.Body = io.NopCloser(bytes.NewBuffer(reqBodyBytes))
+		}
+	}
+
+	resp, err := l.Proxied.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if isLLM && resp.Body != nil {
+		var s *server.Server
+		if val := req.Context().Value("approval_manager"); val != nil {
+			s, _ = val.(*server.Server)
+		}
+		var sessionID string
+		if val := req.Context().Value("session_id"); val != nil {
+			sessionID, _ = val.(string)
+		}
+
+		_ = os.MkdirAll("bin", 0755)
+		logFile, logErr := os.OpenFile("bin/llm_io.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if logErr == nil {
+			_, _ = logFile.WriteString("\n========================================================================\n")
+			fmt.Fprintf(logFile, "[TIMESTAMP]   %s\n", time.Now().Format("2006-01-02 15:04:05"))
+			fmt.Fprintf(logFile, "[LLM REQ API] %s %s\n", req.Method, req.URL.String())
+			
+			if len(reqBodyBytes) > 0 {
+				_, _ = logFile.WriteString("[LLM REQUEST PROMPT PAYLOAD (UP)]\n")
+				var prettyJSON bytes.Buffer
+				if jsonErr := json.Indent(&prettyJSON, reqBodyBytes, "", "  "); jsonErr == nil {
+					logFile.Write(prettyJSON.Bytes())
+				} else {
+					logFile.Write(reqBodyBytes)
+				}
+				_, _ = logFile.WriteString("\n")
+			}
+			_, _ = logFile.WriteString("[LLM RESPONSE STREAM (DOWN)]\n")
+
+			// 利用 TeeReader 机制进行物理拦截，零拖慢、零影响打字打字机体验
+			resp.Body = &LoggingReadCloser{
+				original:  resp.Body,
+				tee:       io.TeeReader(resp.Body, logFile),
+				logFile:   logFile,
+				server:    s,
+				sessionID: sessionID,
+			}
+		}
+	}
+
+	return resp, nil
+}
+
 func main() {
+	// 部署底层大模型协议拦截探针，全自动、100% 毫无保留落盘所有历史上下文 Payload 与下行流
+	http.DefaultTransport = &LoggingRoundTripper{Proxied: http.DefaultTransport}
+
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		log.Fatal("请设置 OPENAI_API_KEY 环境变量")

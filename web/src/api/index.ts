@@ -82,6 +82,7 @@ async function request<T>(url: string, opts: RequestInit = {}): Promise<T> {
 
 export interface UserSettings {
   workspace_root: string
+  typing_speed: number
 }
 
 export interface FileNode {
@@ -89,6 +90,17 @@ export interface FileNode {
   path: string
   is_dir: boolean
   children?: FileNode[]
+}
+
+export interface FilePreviewData {
+  name: string
+  size: number
+  mod_time: number
+  is_dir: boolean
+  is_binary: boolean
+  extension: string
+  content: string
+  is_truncated: boolean
 }
 
 export const api = {
@@ -105,6 +117,9 @@ export const api = {
   getSettings: () => request<UserSettings>('/api/settings'),
   saveSettings: (root: string) => request<{ ok: boolean }>('/api/settings', { method: 'POST', body: JSON.stringify({ workspace_root: root }) }),
   getWorkspaceFiles: () => request<{ workspace_root: string, files: FileNode[] }>('/api/workspace/files'),
+  openSelectFolderDialog: () => request<{ ok: boolean, canceled: boolean, path?: string }>('/api/workspace/select-dialog', { method: 'POST' }),
+  getFilePreview: (path: string) => request<FilePreviewData>('/api/workspace/file-preview?path=' + encodeURIComponent(path)),
+  getFileRawUrl: (path: string) => '/api/workspace/file-raw?path=' + encodeURIComponent(path),
 }
 
 /** SSE 流式聊天 */
@@ -121,6 +136,7 @@ export interface SSEHandlers {
   onToolCall?: (toolCall: { id: string; name: string; arguments: string }) => void
   onObservation?: (observation: { id: string; name: string; content: string }) => void
   onApprovalRequest?: (approval: { id: string; tool_name: string; arguments: string }) => void
+  onWorkspaceUpdated?: (data: { workspace_root: string }) => void
   onUsage: (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void
   onError: (msg: string) => void
   onDone: () => void
@@ -176,6 +192,8 @@ function handleSSEEvent(chunk: string, handlers: SSEHandlers) {
     handlers.onObservation?.(data)
   } else if (event === 'approval_request') {
     handlers.onApprovalRequest?.(data)
+  } else if (event === 'workspace_updated') {
+    handlers.onWorkspaceUpdated?.(data)
   } else if (event === 'usage') {
     handlers.onUsage(data)
   } else if (event === 'error') {

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -118,6 +119,10 @@ type Server struct {
 
 	// SSE 并发写锁，保证主协程与工具协程在并发推送事件时绝对物理安全，彻底绝杀 Concurrent Write Panic！
 	sseMu sync.Mutex
+
+	// 真实用量临时中转寄存器，用来彻底清洗由于底层库带来的全局累加污染，保航前端显示
+	realUsageMu sync.Mutex
+	realUsage   map[string]*model.Usage // session_id -> usage
 }
 
 // chatRequest 是 /api/chat 接口的请求体。
@@ -156,6 +161,7 @@ func New(configs []ModelConfig, defaultModel string) (*Server, error) {
 		sessions:     make(map[string]map[string]*SessionInfo),
 		skills:       defaultSkills(),
 		approvals:    make(map[string]*ApprovalRequest),
+		realUsage:    make(map[string]*model.Usage),
 	}
 
 	s.loadTokenStats() // 加载历史 token 统计
@@ -169,6 +175,9 @@ func New(configs []ModelConfig, defaultModel string) (*Server, error) {
 	s.mux.HandleFunc("/api/approvals/respond", s.handleApprovalRespond)
 	s.mux.HandleFunc("/api/settings", s.handleSettings)
 	s.mux.HandleFunc("/api/workspace/files", s.handleWorkspaceFiles)
+	s.mux.HandleFunc("/api/workspace/select-dialog", s.handleSelectWorkspaceDialog)
+	s.mux.HandleFunc("/api/workspace/file-preview", s.handleWorkspaceFilePreview)
+	s.mux.HandleFunc("/api/workspace/file-raw", s.handleWorkspaceFileRaw)
 	return s, nil
 }
 
@@ -336,6 +345,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		inXmlBlock          = false
 	)
 
+	// 初始化活动工作区目录指纹变动监听哨兵，免去用户手动刷新
+	lastFingerprint, _ := getWorkspaceFingerprint(workspaceRoot)
+	ticker := time.NewTicker(1500 * time.Millisecond)
+	defer ticker.Stop()
+
 	for {
 		var ev *event.Event
 		var appEv *ApprovalEvent
@@ -353,6 +367,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if ev.Usage != nil {
+				// 优先使用物理套接字拦截到最纯正无污染单次用量，清洗底层库大模型客户端在内存中对所有会话的脏累计错误
+				if realU := s.GetRealUsage(sessionID); realU != nil {
+					ev.Usage = realU
+				}
 				lastUsage = ev.Usage
 			}
 
@@ -513,9 +531,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				"tool_name": appEv.ToolName,
 				"arguments": appEv.Arguments,
 			})
+
+		case <-ticker.C:
+			// 1.5 秒热监听：比对工作区指纹，自动广播变动事件，免去用户手动刷新
+			if currentFingerprint, err := getWorkspaceFingerprint(workspaceRoot); err == nil && currentFingerprint != lastFingerprint {
+				lastFingerprint = currentFingerprint
+				fmt.Printf("[WATCHER] 检测到工作区文件变动，向前端推送 workspace_updated: %s\n", workspaceRoot)
+				s.writeSSE(w, flusher, "workspace_updated", map[string]any{"workspace_root": workspaceRoot})
+			}
 		}
 	}
 chatDone:
+	// 收尾前，确保再清洗一次，覆盖由于底层库最后的结算事件带来的累计污染
+	if realU := s.GetRealUsage(sessionID); realU != nil {
+		lastUsage = realU
+	}
 
 	// 记录结构化调试与 I/O 日志到 bin/llm_io.log 中，极大方便后续开发和扫描定位
 	if logFile, err := os.OpenFile("bin/llm_io.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666); err == nil {
@@ -915,15 +945,17 @@ func (s *Server) saveUserSessionsLocked(userID string) {
 
 // SafetyConfig 对应 config/safety.yaml 配置结构体。
 type SafetyConfig struct {
-	Enabled bool     `yaml:"enabled"`
-	Actions []string `yaml:"actions"`
+	Enabled     bool     `yaml:"enabled"`
+	Actions     []string `yaml:"actions"`
+	TypingSpeed int      `yaml:"typing_speed"`
 }
 
 // loadSafetyConfig 实现在运行时免重启热加载安全审批配置文件。如果读取失败，优雅地使用防呆默认值。
 func loadSafetyConfig() SafetyConfig {
 	config := SafetyConfig{
-		Enabled: true,
-		Actions: []string{"write_file", "edit_file", "run_command"},
+		Enabled:     true,
+		Actions:     []string{"write_file", "edit_file", "run_command"},
+		TypingSpeed: 20,
 	}
 
 	data, err := os.ReadFile("config/safety.yaml")
@@ -1071,6 +1103,7 @@ func (s *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 // UserSettings 对应用户的自定义偏好设置（如 WorkspaceRoot 等）。
 type UserSettings struct {
 	WorkspaceRoot string `json:"workspace_root"`
+	TypingSpeed   int    `json:"typing_speed"`
 }
 
 // FileNode 表示工作目录下的树形文件结构。
@@ -1088,15 +1121,17 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodGet {
 		wd, _ := os.Getwd()
+		cfg := loadSafetyConfig()
 		settings := UserSettings{
 			WorkspaceRoot: wd,
+			TypingSpeed:   cfg.TypingSpeed,
 		}
 
 		data, err := os.ReadFile(filename)
 		if err == nil {
 			var loaded UserSettings
 			if err := json.Unmarshal(data, &loaded); err == nil && loaded.WorkspaceRoot != "" {
-				settings = loaded
+				settings.WorkspaceRoot = loaded.WorkspaceRoot
 			}
 		}
 
@@ -1221,3 +1256,219 @@ func buildFileTree(root, current string) ([]*FileNode, error) {
 
 	return nodes, nil
 }
+
+// handleSelectWorkspaceDialog 拉起操作系统（Windows PowerShell）原生文件夹浏览选择弹窗，极大改善输入路径体验。
+func (s *Server) handleSelectWorkspaceDialog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 采用微软 100% 原生 COM 免配置、免转义的 Shell.Application 现代化大弹窗方案：
+	// 并在调用前利用 Windows 核心 API GetForegroundWindow() 动态锚定当前前台拥有焦点的浏览器（Chrome/Edge）的窗口句柄 (HWND)。
+	// 将其作为父窗口句柄传入，在 Windows 的窗口层级 Z-Order 中，子 Dialog 100% 会被强行绝对置顶在浏览器最前端，彻底解决隐藏在背后的瑕疵。
+	cmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+		"$sig = '[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow();'; $type = Add-Type -MemberDefinition $sig -Name 'Win32Win' -Namespace 'Win32' -PassThru; $hwnd = $type::GetForegroundWindow(); $app = New-Object -ComObject Shell.Application; $f = $app.BrowseForFolder($hwnd, '请选择 trpc_agent 智能体的运行根目录', 80, 17); if ($f) { $f.Self.Path }")
+	
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("[SELECT DIALOG ERR] 执行 PowerShell 弹窗命令失败: %v, 输出日志: %s\n", err, string(out))
+		http.Error(w, fmt.Sprintf("调用系统目录选择弹窗失败: %v, 详情: %s", err, string(out)), http.StatusInternalServerError)
+		return
+	}
+
+	path := strings.TrimSpace(string(out))
+	if path == "" {
+		// 用户点击了取消或者没选，优雅返回 canceled
+		writeJSON(w, map[string]any{"ok": true, "canceled": true})
+		return
+	}
+
+	// 转换下划线斜杠，确保路径格式在各端呈现优美一致
+	path = filepath.Clean(path)
+
+	writeJSON(w, map[string]any{
+		"ok":       true,
+		"canceled": false,
+		"path":     path,
+	})
+}
+
+// getWorkspaceFingerprint 极其高效地对工作区生成一个唯一的、极轻量的状态指纹（总文件数 + 最后一个修改时间 + 大小和），从而不需要消耗 CPU 进行深层内容 Hash
+func getWorkspaceFingerprint(root string) (string, error) {
+	var totalFiles int
+	var maxModTime int64
+	var totalSize int64
+
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // 容错，有些文件可能无法读取，直接略过
+		}
+		name := info.Name()
+		// 屏蔽巨无霸排除区，提速千倍，同时防止循环递归
+		if name == "node_modules" || name == ".git" || name == "vendor" || name == ".codebuddy" || name == "bin" {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if !info.IsDir() {
+			totalFiles++
+			totalSize += info.Size()
+			if info.ModTime().Unix() > maxModTime {
+				maxModTime = info.ModTime().Unix()
+			}
+		} else {
+			// 文件夹的修改也算
+			if info.ModTime().Unix() > maxModTime {
+				maxModTime = info.ModTime().Unix()
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%d-%d-%d", totalFiles, maxModTime, totalSize), nil
+}
+
+// FilePreviewResponse 对应文件内容预览信息载荷。
+type FilePreviewResponse struct {
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	ModTime   int64  `json:"mod_time"`
+	IsDir     bool   `json:"is_dir"`
+	IsBinary  bool   `json:"is_binary"`
+	Extension string `json:"extension"`
+	Content   string `json:"content"`
+	IsTrunc   bool   `json:"is_truncated"` // 标志是否发生了大文件截断保护
+}
+
+// handleWorkspaceFileRaw 用于流式直接返回原始文件（对图片、PDF 预览尤为关键，支持 Range 断点续传）。
+func (s *Server) handleWorkspaceFileRaw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID := getUserID(r)
+	rootPath := s.getUserWorkspaceRoot(userID)
+	relPath := r.URL.Query().Get("path")
+	if relPath == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+
+	absPath := filepath.Clean(filepath.Join(rootPath, relPath))
+	if !strings.HasPrefix(absPath, rootPath) {
+		http.Error(w, "安全沙箱拦截：拒绝非法目录穿透", http.StatusForbidden)
+		return
+	}
+
+	// 100% 官方原生 ServeFile 机制，自动完成 Etag / MIME Type 匹配、极速输出流
+	http.ServeFile(w, r, absPath)
+}
+
+// handleWorkspaceFilePreview 智能判别二进制，并读取部分分片字符返回，实现大文件内存与渲染无感防卡自愈。
+func (s *Server) handleWorkspaceFilePreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID := getUserID(r)
+	rootPath := s.getUserWorkspaceRoot(userID)
+	relPath := r.URL.Query().Get("path")
+	if relPath == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+
+	absPath := filepath.Clean(filepath.Join(rootPath, relPath))
+	if !strings.HasPrefix(absPath, rootPath) {
+		http.Error(w, "安全沙箱拦截：拒绝非法目录穿透", http.StatusForbidden)
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("文件在本地物理不存在: %v", err), http.StatusNotFound)
+		return
+	}
+
+	resp := FilePreviewResponse{
+		Name:      info.Name(),
+		Size:      info.Size(),
+		ModTime:   info.ModTime().Unix(),
+		IsDir:     info.IsDir(),
+		Extension: strings.ToLower(filepath.Ext(info.Name())),
+	}
+
+	if info.IsDir() {
+		writeJSON(w, resp)
+		return
+	}
+
+	// 1. 读取前 1024 字节，智能检测是否是二进制格式（含有 0x00 字节）
+	file, err := os.Open(absPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("读取文件流失败: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	buf := make([]byte, 1024)
+	n, _ := file.Read(buf)
+	isBinary := false
+	for i := 0; i < n; i++ {
+		if buf[i] == 0 {
+			isBinary = true
+			break
+		}
+	}
+	resp.IsBinary = isBinary
+
+	// 2. 如果不是二进制文本，载入文本并开启 150KB 的大文件防御屏障
+	if !isBinary {
+		const maxPreviewBytes = 150 * 1024 // 150KB 大文件物理防火墙
+		if info.Size() > maxPreviewBytes {
+			resp.IsTrunc = true
+			contentBuf := make([]byte, maxPreviewBytes)
+			_, _ = file.ReadAt(contentBuf, 0)
+			resp.Content = string(contentBuf) + "\n\n... [⚙️ 大文件自愈防护保护] 侦测到该文件体积巨大，当前仅按需预览前 150KB。如需完整检索/编辑，请唤醒 AI 编写脚本进行批量物理修改！..."
+		} else {
+			contentBytes, err := os.ReadFile(absPath)
+			if err == nil {
+				resp.Content = string(contentBytes)
+			}
+		}
+	}
+
+	writeJSON(w, resp)
+}
+
+// SetRealUsage 记录某次物理网络请求返回的最真实的 Usage，清洗全局累计用量污染，确保 100% 精准单次账单
+func (s *Server) SetRealUsage(sessionID string, u *model.Usage) {
+	s.realUsageMu.Lock()
+	defer s.realUsageMu.Unlock()
+	if s.realUsage == nil {
+		s.realUsage = make(map[string]*model.Usage)
+	}
+	s.realUsage[sessionID] = u
+}
+
+// GetRealUsage 获取该会话最新一次最干净、最精确的单次物理用量
+func (s *Server) GetRealUsage(sessionID string) *model.Usage {
+	s.realUsageMu.Lock()
+	defer s.realUsageMu.Unlock()
+	if s.realUsage == nil {
+		return nil
+	}
+	return s.realUsage[sessionID]
+}
+
+
+

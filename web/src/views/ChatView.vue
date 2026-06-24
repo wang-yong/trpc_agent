@@ -1,33 +1,44 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, computed, onMounted } from 'vue'
+import { ref, nextTick, watch, computed, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
 import MessageBubble from '@/components/chat/MessageBubble.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import ThinkingChain from '@/components/agent/ThinkingChain.vue'
 import FileTreeItem from '@/components/chat/FileTreeItem.vue'
+import FilePreviewModal from '@/components/chat/FilePreviewModal.vue'
 import { api, type FileNode } from '@/api'
 
 const chat = useChatStore()
 const settings = useSettingsStore()
 const messagesWrap = ref<HTMLElement>()
 
-function scrollToBottom() {
+let lastScrollTime = 0
+function scrollToBottom(force = false) {
+  const now = Date.now()
+  // 50ms 频率限制阀：在流式输出超高频触发时进行物理限流，绝杀浏览器因 smooth 缓动堆叠造成的滚动条严重粘滞、拖不动 Bug
+  if (!force && now - lastScrollTime < 50) return
+  lastScrollTime = now
+
   nextTick(() => {
     if (messagesWrap.value) {
       messagesWrap.value.scrollTo({
         top: messagesWrap.value.scrollHeight,
-        behavior: 'smooth',
+        // 吐字期间使用极速 'auto' 强制紧跟贴底，防漏白；只有新消息到达或用户手动切回合时才使用 'smooth' 带来舒适的滑入感
+        behavior: force ? 'smooth' : 'auto',
       })
     }
   })
 }
 
-watch(() => chat.currentMessages.length, () => scrollToBottom())
+// 监听消息数组长度变动（新回合/新提问消息到达），强制使用 smooth 优雅滑入
+watch(() => chat.currentMessages.length, () => scrollToBottom(true))
+
+// 监听最后一个 AI 回复的流式吐字，使用极速 auto 实时贴底追踪，拒绝任何粘滞卡顿
 watch(() => {
   const msgs = chat.currentMessages
   return msgs.length ? msgs[msgs.length - 1].content : ''
-}, () => scrollToBottom())
+}, () => scrollToBottom(false))
 
 // 灵感提示示例
 const inspirations = [
@@ -101,9 +112,14 @@ const newPathInput = ref('')
 async function loadWorkspaceAndFiles() {
   filesLoading.value = true
   try {
-    const settings = await api.getSettings()
-    workspaceRoot.value = settings.workspace_root
-    newPathInput.value = settings.workspace_root
+    const resSettings = await api.getSettings()
+    workspaceRoot.value = resSettings.workspace_root
+    newPathInput.value = resSettings.workspace_root
+
+    // 毫秒级同步后端 safety.yaml 的最新 typing_speed 极客打字流速配置！
+    if (resSettings.typing_speed !== undefined) {
+      settings.updateTypingSpeed(resSettings.typing_speed)
+    }
 
     const res = await api.getWorkspaceFiles()
     fileTree.value = res.files
@@ -128,8 +144,56 @@ async function saveNewWorkspace() {
   }
 }
 
+// ====== 动态右侧面板宽度拖拽管理 (支持 localStorage 持久化) ======
+const localRightWidth = localStorage.getItem('trpc_agent_right_panel_width')
+const rightPanelWidth = ref<number>(localRightWidth ? parseInt(localRightWidth, 10) : 280)
+
+function initRightResize(e: MouseEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startWidth = rightPanelWidth.value
+
+  document.body.classList.add('is-resizing')
+
+  const handleMouseMove = (moveEvent: MouseEvent) => {
+    const diffX = moveEvent.clientX - startX
+    const newWidth = startWidth - diffX
+    // 彻底解禁右侧拉伸限制！只保留 20px 极简物理安全防负值崩溃兜底
+    rightPanelWidth.value = Math.max(20, newWidth)
+  }
+
+  const handleMouseUp = () => {
+    document.removeEventListener('mousemove', handleMouseMove)
+    document.removeEventListener('mouseup', handleMouseUp)
+    document.body.classList.remove('is-resizing')
+    localStorage.setItem('trpc_agent_right_panel_width', String(rightPanelWidth.value))
+  }
+
+  document.addEventListener('mousemove', handleMouseMove)
+  document.addEventListener('mouseup', handleMouseUp)
+}
+
+async function openSelectFolderDialog() {
+  try {
+    const res = await api.openSelectFolderDialog()
+    if (res.ok && !res.canceled && res.path) {
+      newPathInput.value = res.path
+      await saveNewWorkspace()
+    }
+  } catch (err: any) {
+    console.error('拉起文件夹对话框失败:', err)
+  }
+}
+
 onMounted(() => {
   loadWorkspaceAndFiles()
+
+  // 智能捕获后端实时推送的工作区文件变动事件，全自动、秒级刷新资源管理器文件树！
+  window.addEventListener('workspace-updated', loadWorkspaceAndFiles)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('workspace-updated', loadWorkspaceAndFiles)
 })
 </script>
 
@@ -257,8 +321,11 @@ onMounted(() => {
       <ChatInput :busy="chat.busy" @send="chat.sendMessage" />
     </div>
 
+    <!-- 右侧面板拖拽手柄条 -->
+    <div class="resize-handle-right" @mousedown="initRightResize"></div>
+
     <!-- 三栏布局的主体右侧：Trae 风格的 Context & Tasks 侧边面板 -->
-    <aside class="chat-right-panel">
+    <aside class="chat-right-panel" :style="{ width: rightPanelWidth + 'px' }">
       <!-- 1. 工作区资源管理器区块 -->
       <div class="panel-section flex-shrink-0" style="max-height: 320px; display: flex; flex-direction: column;">
         <div class="section-header-row">
@@ -273,7 +340,10 @@ onMounted(() => {
         <div class="workspace-root-bar">
           <template v-if="!editingPath">
             <span class="path-text" :title="workspaceRoot">{{ workspaceRoot || '加载中...' }}</span>
-            <button class="edit-path-btn" @click="editingPath = true" title="指定运行根目录">
+            <button class="edit-path-btn" @click="openSelectFolderDialog" title="弹窗选择本地文件夹" style="margin-right: 4px;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </button>
+            <button class="edit-path-btn" @click="editingPath = true" title="手动输入绝对路径">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
             </button>
           </template>
@@ -365,6 +435,8 @@ onMounted(() => {
       </div>
     </aside>
 
+    <!-- 顶奢级文件内容自适应内嵌式预览大弹窗 -->
+    <FilePreviewModal />
   </div>
 </template>
 
@@ -694,7 +766,6 @@ onMounted(() => {
 
 /* ===== 右侧 Trae 面板 ===== */
 .chat-right-panel {
-  width: 280px;
   height: 100%;
   background: var(--body-color);
   display: flex;
@@ -702,6 +773,7 @@ onMounted(() => {
   padding: 20px 16px;
   flex-shrink: 0;
   overflow-y: auto;
+  min-width: 0;
 }
 .panel-section {
   display: flex;
@@ -1057,4 +1129,24 @@ onMounted(() => {
 /* fade transition */
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* ===== 右侧面板原生拖拽手柄条 ===== */
+.resize-handle-right {
+  width: 6px;
+  background: transparent;
+  cursor: col-resize !important;
+  z-index: 100;
+  position: relative;
+  margin-left: -3px; /* 把它微调到正中心，覆盖两栏边框 */
+  margin-right: -3px;
+  flex-shrink: 0;
+  transition: background 0.2s ease, opacity 0.2s ease;
+}
+
+/* 鼠标悬停在右侧拉伸条时，呈现精致的主色调光泽 */
+.resize-handle-right:hover,
+body.is-resizing .resize-handle-right {
+  background: var(--primary-color) !important;
+  opacity: 0.5 !important;
+}
 </style>

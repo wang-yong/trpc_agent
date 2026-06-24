@@ -12,6 +12,22 @@ export const useSettingsStore = defineStore('settings', () => {
     (localStorage.getItem('theme') as 'dark' | 'light') || 'dark'
   )
 
+  // 动态左侧侧边栏宽度管理，默认 268px，支持 localStorage 持久化
+  const localSidebarWidth = localStorage.getItem('trpc_agent_sidebar_width')
+  const sidebarWidth = ref<number>(localSidebarWidth ? parseInt(localSidebarWidth, 10) : 268)
+
+  // 动态打字流速（毫秒/字），默认 20ms
+  const typingSpeed = ref(20)
+
+  function updateSidebarWidth(w: number) {
+    sidebarWidth.value = w
+    localStorage.setItem('trpc_agent_sidebar_width', String(w))
+  }
+
+  function updateTypingSpeed(speed: number) {
+    typingSpeed.value = speed
+  }
+
   const currentModelDisplay = computed(() => {
     const m = models.value.find(m => m.name === currentModel.value)
     return m?.display_name || 'Unknown'
@@ -52,6 +68,8 @@ export const useSettingsStore = defineStore('settings', () => {
     skills,
     currentSkill,
     theme,
+    sidebarWidth,
+    typingSpeed,
     currentModelDisplay,
     currentSkillData,
     fetchModels,
@@ -59,5 +77,7 @@ export const useSettingsStore = defineStore('settings', () => {
     selectModel,
     selectSkill,
     toggleTheme,
+    updateSidebarWidth,
+    updateTypingSpeed,
   }
 })

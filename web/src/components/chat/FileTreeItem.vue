@@ -8,16 +8,19 @@ const props = defineProps<{
 
 const collapsed = ref(true)
 
-function toggle() {
+function handleClick() {
   if (props.node.is_dir) {
     collapsed.value = !collapsed.value
+  } else {
+    // 触发全局预览广播，携带文件的相对路径
+    window.dispatchEvent(new CustomEvent('preview-file', { detail: props.node.path }))
   }
 }
 </script>
 
 <template>
   <div class="tree-item-node" :class="{ 'is-dir': node.is_dir }">
-    <div class="node-label-row" @click="toggle">
+    <div class="node-label-row" @click="handleClick">
       <!-- 文件夹折叠小箭头 -->
       <span v-if="node.is_dir" class="arrow-icon" :class="{ rotated: !collapsed }">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
