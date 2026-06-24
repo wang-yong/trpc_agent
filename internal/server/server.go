@@ -1,5 +1,5 @@
-// Package server 提供基于 HTTP/SSE 的 Web 聊天服务，
-// 支持多模型切换、会话管理、技能模板等功能。
+// Package server provides HTTP/SSE-based web chat service with multi-model support,
+// session management, and skill templates.
 package server
 
 import (
@@ -26,7 +26,7 @@ import (
 
 const webUserID = "web-user"
 
-// 跨包互通 context keys
+// Context keys for cross-package communication
 const (
 	ApprovalManagerKey = "approval_manager"
 	SessionIDKey       = "session_id"
@@ -43,11 +43,12 @@ type ApprovalEvent struct {
 //go:embed static
 var staticFS embed.FS
 
-// ModelConfig 定义一个可用于聊天的模型配置。
+// ModelConfig defines a model configuration for chat.
 type ModelConfig struct {
-	Name        string        // 唯一标识，如 "deepseek-ai/DeepSeek-V3"
-	DisplayName string        // 展示名，如 "DeepSeek V3"
-	Runner      runner.Runner
+	Name            string            // Unique identifier, e.g., "deepseek-ai/DeepSeek-V3"
+	DisplayName     string            // Display name, e.g., "DeepSeek V3"
+	Runner          runner.Runner
+	SmartCompressor interface{} // Smart compressor (optional)
 }
 
 // SessionInfo 记录会话的元数据。

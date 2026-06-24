@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 
 	agentpkg "trpc_agent_test/internal/agent"
+	"trpc_agent_test/internal/context"
 	"trpc_agent_test/internal/server"
 )
 
@@ -203,6 +204,34 @@ func main() {
 			summary.WithMaxSummaryWords(150), // 限制摘要描述在 150 字以内，精炼不失重点
 		)
 
+		// 1.5. 创建智能边界压缩器（话题切换时立即触发压缩）
+		smartCompressor := context.WrapSummarizer(summarizer, m,
+			context.SmartCompressorConfig{
+				Enabled:  true,
+				DebugMode: false, // 生产环境建议关闭
+				CompressionThresholds: map[context.TopicRelation]context.CompressionThreshold{
+					context.TopicUnrelated: {
+						TokenThreshold:      1500, // 话题完全无关时，更低的触发阈值
+						EventThreshold:      8,
+						SummaryWords:        100,
+						PreserveRecentCount: 2,
+					},
+					context.TopicWeakRelated: {
+						TokenThreshold:      3000,
+						EventThreshold:      15,
+						SummaryWords:        150,
+						PreserveRecentCount: 3,
+					},
+					context.TopicStrongRelated: {
+						TokenThreshold:      5000,
+						EventThreshold:      20,
+						SummaryWords:        200,
+						PreserveRecentCount: 5,
+					},
+				},
+			},
+		)
+
 		// 2. 创建配置了 Summarizer 的 inmemory Session 历史管理器
 		sessionSvc := inmemory.NewSessionService(
 			inmemory.WithSummarizer(summarizer),
@@ -218,6 +247,7 @@ func main() {
 			Name:        md.Name,
 			DisplayName: md.DisplayName,
 			Runner:      r,
+			SmartCompressor: smartCompressor, // 附加智能压缩器
 		})
 	}
 
