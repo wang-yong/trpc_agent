@@ -13,6 +13,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 
 	agentpkg "trpc_agent_test/internal/agent"
 	"trpc_agent_test/internal/server"
@@ -183,7 +185,7 @@ func main() {
 		{"Qwen/Qwen2.5-Coder-32B-Instruct", "Qwen Coder 32B"},
 	}
 
-	// 为每个模型创建独立的 Runner
+	// 为每个模型创建独立的 Runner，集成框架原生大模型自动摘要、50%警戒线满水位滑动窗口截断压缩，极力守护 Token 账单
 	var configs []server.ModelConfig
 	for _, md := range modelDefs {
 		m := openai.New(md.Name,
@@ -191,7 +193,27 @@ func main() {
 			openai.WithBaseURL(baseURL),
 		)
 		assistant := agentpkg.New("assistant", m)
-		r := runner.NewRunner("web-"+md.Name, assistant)
+
+		// 1. 创建原生的 SessionSummarizer 摘要生成器
+		summarizer := summary.NewSummarizer(m,
+			summary.WithContextThreshold(
+				summary.WithContextThresholdRatio(0.5), // 黄金 50% 满水位警戒线，一旦达到，立即触发大模型自动摘要
+			),
+			summary.WithName("session-compressor"),
+			summary.WithMaxSummaryWords(150), // 限制摘要描述在 150 字以内，精炼不失重点
+		)
+
+		// 2. 创建配置了 Summarizer 的 inmemory Session 历史管理器
+		sessionSvc := inmemory.NewSessionService(
+			inmemory.WithSummarizer(summarizer),
+			inmemory.WithSessionEventLimit(100), // 限制每个 Session 最大的缓存完整事件数，防止无限积压
+		)
+
+		// 3. 构建 Runner 时传入我们高抗压、高自愈的 sessionSvc
+		r := runner.NewRunner("web-"+md.Name, assistant,
+			runner.WithSessionService(sessionSvc),
+		)
+
 		configs = append(configs, server.ModelConfig{
 			Name:        md.Name,
 			DisplayName: md.DisplayName,
