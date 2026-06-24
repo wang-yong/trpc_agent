@@ -108,10 +108,14 @@ type WriteFileOutput struct {
 }
 
 // ensureSafePath 安全检测：确保路径在当前工作区内，禁止穿透（如 ../..）访问系统根目录。
-func ensureSafePath(inputPath string) (string, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("无法获取当前工作目录: %v", err)
+func ensureSafePath(ctx context.Context, inputPath string) (string, error) {
+	wd, ok := ctx.Value("workspace_root").(string)
+	if !ok || wd == "" {
+		var err error
+		wd, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("无法获取当前工作目录: %v", err)
+		}
 	}
 
 	// 默认为当前工作目录
@@ -127,9 +131,9 @@ func ensureSafePath(inputPath string) (string, error) {
 		targetPath = filepath.Clean(filepath.Join(wd, inputPath))
 	}
 
-	// 必须以当前工作目录（工作区）为前缀
+	// 必须以当前工作区目录为前缀
 	if !strings.HasPrefix(targetPath, wd) {
-		return "", fmt.Errorf("安全沙箱拦截：路径 '%s' 超出当前工作区范围", inputPath)
+		return "", fmt.Errorf("安全沙箱拦截：路径 '%s' 超出当前工作区范围 %s", inputPath, wd)
 	}
 
 	return targetPath, nil
@@ -137,7 +141,7 @@ func ensureSafePath(inputPath string) (string, error) {
 
 // ListDirectory 列出指定目录下的文件和文件夹。
 func ListDirectory(ctx context.Context, input ListDirInput) (ListDirOutput, error) {
-	safePath, err := ensureSafePath(input.Path)
+	safePath, err := ensureSafePath(ctx, input.Path)
 	if err != nil {
 		return ListDirOutput{}, err
 	}
@@ -169,7 +173,7 @@ func ListDirectory(ctx context.Context, input ListDirInput) (ListDirOutput, erro
 
 // ReadFileContent 读取指定文件的全部文本内容。
 func ReadFileContent(ctx context.Context, input ReadFileInput) (ReadFileOutput, error) {
-	safePath, err := ensureSafePath(input.Path)
+	safePath, err := ensureSafePath(ctx, input.Path)
 	if err != nil {
 		return ReadFileOutput{}, err
 	}
@@ -186,7 +190,7 @@ func ReadFileContent(ctx context.Context, input ReadFileInput) (ReadFileOutput, 
 
 // WriteFileContent 写入文本内容到指定文件。
 func WriteFileContent(ctx context.Context, input WriteFileInput) (WriteFileOutput, error) {
-	safePath, err := ensureSafePath(input.Path)
+	safePath, err := ensureSafePath(ctx, input.Path)
 	if err != nil {
 		return WriteFileOutput{Success: false, Message: err.Error()}, nil
 	}
@@ -221,7 +225,7 @@ func WriteFileContent(ctx context.Context, input WriteFileInput) (WriteFileOutpu
 
 // EditFileContent 精准局部替换修改文件中的代码段。
 func EditFileContent(ctx context.Context, input EditFileInput) (EditFileOutput, error) {
-	safePath, err := ensureSafePath(input.Path)
+	safePath, err := ensureSafePath(ctx, input.Path)
 	if err != nil {
 		return EditFileOutput{Success: false, Message: err.Error()}, nil
 	}
@@ -278,15 +282,19 @@ func EditFileContent(ctx context.Context, input EditFileInput) (EditFileOutput, 
 
 // GlobFiles 在工作区内，递归进行极速文件查找过滤。
 func GlobFiles(ctx context.Context, input GlobFilesInput) (GlobFilesOutput, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return GlobFilesOutput{}, err
+	wd, ok := ctx.Value("workspace_root").(string)
+	if !ok || wd == "" {
+		var err error
+		wd, err = os.Getwd()
+		if err != nil {
+			return GlobFilesOutput{}, err
+		}
 	}
 
 	pattern := strings.ToLower(input.Pattern)
 	var matches []string
 
-	err = filepath.Walk(wd, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(wd, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // 忽略局部无法访问的文件，确保搜索不中断
 		}
@@ -332,14 +340,18 @@ func GlobFiles(ctx context.Context, input GlobFilesInput) (GlobFilesOutput, erro
 		Pattern: input.Pattern,
 		Matches: matches,
 		Count:   len(matches),
-	}, nil
+	}, err
 }
 
 // GrepSearch 扫描工作区所有文本文件，对每行文本进行关键字检索。
 func GrepSearch(ctx context.Context, input GrepSearchInput) (GrepSearchOutput, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return GrepSearchOutput{}, err
+	wd, ok := ctx.Value("workspace_root").(string)
+	if !ok || wd == "" {
+		var err error
+		wd, err = os.Getwd()
+		if err != nil {
+			return GrepSearchOutput{}, err
+		}
 	}
 
 	pattern := input.Pattern
@@ -355,7 +367,7 @@ func GrepSearch(ctx context.Context, input GrepSearchInput) (GrepSearchOutput, e
 	var matches []GrepMatch
 	totalCount := 0
 
-	err = filepath.Walk(wd, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(wd, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -410,7 +422,7 @@ func GrepSearch(ctx context.Context, input GrepSearchInput) (GrepSearchOutput, e
 		Pattern: pattern,
 		Matches: matches,
 		Count:   totalCount,
-	}, nil
+	}, err
 }
 
 // NewListDirTool 创建目录浏览工具。

@@ -76,6 +76,11 @@ func RunCommand(ctx context.Context, input *CommandInput) (CommandOutput, error)
 	// Windows 环境下调用 cmd /c
 	cmd := exec.CommandContext(runCtx, "cmd", "/c", cmdStr)
 
+	// 如果上下文注入了运行根目录，将执行目录无缝切换至该工作区
+	if wd, ok := ctx.Value("workspace_root").(string); ok && wd != "" {
+		cmd.Dir = wd
+	}
+
 	stdoutBuf := &strings.Builder{}
 	stderrBuf := &strings.Builder{}
 	cmd.Stdout = stdoutBuf

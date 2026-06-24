@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -166,6 +167,8 @@ func New(configs []ModelConfig, defaultModel string) (*Server, error) {
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	s.mux.HandleFunc("/api/token-stats", s.handleTokenStats)
 	s.mux.HandleFunc("/api/approvals/respond", s.handleApprovalRespond)
+	s.mux.HandleFunc("/api/settings", s.handleSettings)
+	s.mux.HandleFunc("/api/workspace/files", s.handleWorkspaceFiles)
 	return s, nil
 }
 
@@ -301,11 +304,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	// 深度安全防护：上下文动态装配注入。使用永不断连的 Background Context 挂载运行 ReAct 推理，
 	// 彻底免疫任何由于前端长连接挂起、网络抖动超时引起 context canceled 导致的引擎中断！
+	workspaceRoot := s.getUserWorkspaceRoot(userID)
+
 	flushChan := make(chan *ApprovalEvent, 10)
 	ctx := context.WithValue(context.Background(), ApprovalManagerKey, s)
 	ctx = context.WithValue(ctx, WriteSSEFuncKey, writeSSEFunc)
 	ctx = context.WithValue(ctx, SessionIDKey, sessionID)
 	ctx = context.WithValue(ctx, FlushChanKey, flushChan)
+	ctx = context.WithValue(ctx, "workspace_root", workspaceRoot)
 
 	events, err := rnr.Run(ctx, userID, sessionID, model.NewUserMessage(timeContext))
 	if err != nil {
@@ -1060,4 +1066,158 @@ func (s *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 	appReq.Response <- req.Approve
 
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// UserSettings 对应用户的自定义偏好设置（如 WorkspaceRoot 等）。
+type UserSettings struct {
+	WorkspaceRoot string `json:"workspace_root"`
+}
+
+// FileNode 表示工作目录下的树形文件结构。
+type FileNode struct {
+	Name     string      `json:"name"`
+	Path     string      `json:"path"` // 相对路径，便于前端交互
+	IsDir    bool        `json:"is_dir"`
+	Children []*FileNode `json:"children,omitempty"`
+}
+
+// handleSettings 管理用户指定的运行根目录（获取和设置）。支持物理文件夹有效性校验和防丢落盘。
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
+	filename := fmt.Sprintf("bin/sessions/settings_%s.json", userID)
+
+	if r.Method == http.MethodGet {
+		wd, _ := os.Getwd()
+		settings := UserSettings{
+			WorkspaceRoot: wd,
+		}
+
+		data, err := os.ReadFile(filename)
+		if err == nil {
+			var loaded UserSettings
+			if err := json.Unmarshal(data, &loaded); err == nil && loaded.WorkspaceRoot != "" {
+				settings = loaded
+			}
+		}
+
+		writeJSON(w, settings)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req UserSettings
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		req.WorkspaceRoot = strings.TrimSpace(req.WorkspaceRoot)
+		if req.WorkspaceRoot == "" {
+			http.Error(w, "workspace_root is required", http.StatusBadRequest)
+			return
+		}
+
+		// 验证路径的物理存在性，防拼写错误
+		if info, err := os.Stat(req.WorkspaceRoot); err != nil || !info.IsDir() {
+			http.Error(w, "该文件夹路径在本地不存在，请核对输入！", http.StatusBadRequest)
+			return
+		}
+
+		_ = os.MkdirAll("bin/sessions", 0755)
+		data, err := json.MarshalIndent(req, "", "  ")
+		if err == nil {
+			_ = os.WriteFile(filename, data, 0666)
+		}
+
+		writeJSON(w, map[string]any{"ok": true, "workspace_root": req.WorkspaceRoot})
+		return
+	}
+
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// getUserWorkspaceRoot 获取该用户的指定运行根目录，若不存在则回退至 Go 进程默认的 wd 工作区。
+func (s *Server) getUserWorkspaceRoot(userID string) string {
+	filename := fmt.Sprintf("bin/sessions/settings_%s.json", userID)
+	data, err := os.ReadFile(filename)
+	if err == nil {
+		var loaded UserSettings
+		if err := json.Unmarshal(data, &loaded); err == nil && loaded.WorkspaceRoot != "" {
+			return loaded.WorkspaceRoot
+		}
+	}
+	wd, _ := os.Getwd()
+	return wd
+}
+
+// handleWorkspaceFiles 极速扫描用户的 Workspace 并组装树形数据返回给前端。
+func (s *Server) handleWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID := getUserID(r)
+	rootPath := s.getUserWorkspaceRoot(userID)
+
+	tree, err := buildFileTree(rootPath, rootPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"workspace_root": rootPath,
+		"files":          tree,
+	})
+}
+
+// buildFileTree 递归遍历物理路径并组装 FileTree，屏蔽 node_modules/git 等巨无霸地带提速百倍，自带 VS Code 风格（文件夹置顶）的高级排序。
+func buildFileTree(root, current string) ([]*FileNode, error) {
+	entries, err := os.ReadDir(current)
+	if err != nil {
+		return nil, err
+	}
+
+	nodes := make([]*FileNode, 0)
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "node_modules" || name == ".git" || name == "vendor" || name == ".codebuddy" || name == "bin" {
+			continue
+		}
+
+		fullPath := filepath.Join(current, name)
+		relPath, err := filepath.Rel(root, fullPath)
+		if err != nil {
+			relPath = name
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		node := &FileNode{
+			Name:  name,
+			Path:  relPath,
+			IsDir: entry.IsDir(),
+		}
+
+		if entry.IsDir() {
+			children, err := buildFileTree(root, fullPath)
+			if err == nil {
+				node.Children = children
+			}
+		}
+
+		nodes = append(nodes, node)
+	}
+
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].IsDir && !nodes[j].IsDir {
+			return true
+		}
+		if !nodes[i].IsDir && nodes[j].IsDir {
+			return false
+		}
+		return strings.ToLower(nodes[i].Name) < strings.ToLower(nodes[j].Name)
+	})
+
+	return nodes, nil
 }

@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, computed } from 'vue'
+import { ref, nextTick, watch, computed, onMounted } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
 import MessageBubble from '@/components/chat/MessageBubble.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import ThinkingChain from '@/components/agent/ThinkingChain.vue'
+import FileTreeItem from '@/components/chat/FileTreeItem.vue'
+import { api, type FileNode } from '@/api'
 
 const chat = useChatStore()
 const settings = useSettingsStore()
@@ -73,24 +75,6 @@ const searchReferences = computed(() => {
   return refs
 })
 
-// ====== 待办任务：提取正在进行的步骤 ======
-const activeTodoSteps = computed(() => {
-  const todos: { name: string; status: string }[] = []
-  chat.currentMessages.forEach(msg => {
-    if (msg.role === 'ai' && msg.streaming && msg.steps) {
-      msg.steps.forEach(step => {
-        if (step.status === 'thinking' || step.status === 'running') {
-          todos.push({
-            name: step.type === 'thought' ? '正在整理思考链路' : `正在调用工具: ${step.toolName}`,
-            status: step.status,
-          })
-        }
-      })
-    }
-  })
-  return todos
-})
-
 // ====== 上下文窗口利用率计算 ======
 const lastUsageInfo = computed(() => {
   const msgs = chat.currentMessages
@@ -105,6 +89,47 @@ const lastUsageInfo = computed(() => {
     }
   }
   return { pct: 0, total: 0 }
+})
+
+// ====== 自定义 Workspace 运行根目录与递归文件树 ======
+const workspaceRoot = ref('')
+const fileTree = ref<FileNode[]>([])
+const filesLoading = ref(false)
+const editingPath = ref(false)
+const newPathInput = ref('')
+
+async function loadWorkspaceAndFiles() {
+  filesLoading.value = true
+  try {
+    const settings = await api.getSettings()
+    workspaceRoot.value = settings.workspace_root
+    newPathInput.value = settings.workspace_root
+
+    const res = await api.getWorkspaceFiles()
+    fileTree.value = res.files
+  } catch (err) {
+    console.error('加载工作区文件树失败:', err)
+  } finally {
+    filesLoading.value = false
+  }
+}
+
+async function saveNewWorkspace() {
+  const path = newPathInput.value.trim()
+  if (!path) return
+
+  try {
+    await api.saveSettings(path)
+    editingPath.value = false
+    await loadWorkspaceAndFiles()
+  } catch (err: any) {
+    // 优雅抛出后端返回的 Stat 真实物理路径不存在报错
+    alert(err.message || '路径切换失败，请确认您输入的绝对路径在本地物理存在！')
+  }
+}
+
+onMounted(() => {
+  loadWorkspaceAndFiles()
 })
 </script>
 
@@ -234,6 +259,59 @@ const lastUsageInfo = computed(() => {
 
     <!-- 三栏布局的主体右侧：Trae 风格的 Context & Tasks 侧边面板 -->
     <aside class="chat-right-panel">
+      <!-- 1. 工作区资源管理器区块 -->
+      <div class="panel-section flex-shrink-0" style="max-height: 320px; display: flex; flex-direction: column;">
+        <div class="section-header-row">
+          <h3 class="section-title">工作区</h3>
+          <button class="refresh-btn" @click="loadWorkspaceAndFiles" :disabled="filesLoading" style="margin-left: auto; padding: 2px 6px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px;">
+            <svg :class="{ pulsing: filesLoading }" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            刷新
+          </button>
+        </div>
+        
+        <!-- 运行根目录修改/展示框 -->
+        <div class="workspace-root-bar">
+          <template v-if="!editingPath">
+            <span class="path-text" :title="workspaceRoot">{{ workspaceRoot || '加载中...' }}</span>
+            <button class="edit-path-btn" @click="editingPath = true" title="指定运行根目录">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            </button>
+          </template>
+          <template v-else>
+            <input
+              v-model="newPathInput"
+              type="text"
+              class="path-input-field"
+              placeholder="请输入真实的绝对路径"
+              @keyup.enter="saveNewWorkspace"
+            />
+            <div class="path-actions">
+              <button class="path-act-btn cancel" @click="editingPath = false" title="取消">✕</button>
+              <button class="path-act-btn save" @click="saveNewWorkspace" title="保存">✓</button>
+            </div>
+          </template>
+        </div>
+
+        <!-- 递归文件树滚动视图 -->
+        <div class="file-tree-container scrollable">
+          <div v-if="filesLoading && fileTree.length === 0" class="tree-loading">
+            <span class="pulse-dot"></span> 正在扫描工作区...
+          </div>
+          <div v-else-if="fileTree.length > 0" class="tree-list">
+            <FileTreeItem
+              v-for="node in fileTree"
+              :key="node.path"
+              :node="node"
+            />
+          </div>
+          <div v-else class="tree-empty">
+            工作区无任何文件或未加载
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-divider"></div>
+
       <!-- 2. 上下文利用率区块 -->
       <div class="panel-section">
         <div class="section-header-row">
@@ -851,6 +929,126 @@ const lastUsageInfo = computed(() => {
   .inspire-grid { grid-template-columns: 1fr; }
   .title-text { font-size: 24px; }
   .glow-1, .glow-2 { width: 220px; height: 220px; }
+}
+
+/* ===== 5. 侧边栏工作区资源管理器样式 ===== */
+.workspace-root-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+.path-text {
+  font-size: 11px;
+  color: var(--text-color-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  font-family: monospace;
+}
+.edit-path-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-color-3);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 4px;
+  transition: all .15s;
+}
+.edit-path-btn:hover {
+  background: var(--hover-color);
+  color: var(--primary-color);
+}
+.path-input-field {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-color);
+  font-size: 11px;
+  font-family: monospace;
+  outline: none;
+  min-width: 0;
+}
+.path-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.path-act-btn {
+  background: transparent;
+  border: none;
+  width: 18px; height: 18px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px;
+  transition: all .15s;
+}
+.path-act-btn.cancel {
+  color: #f85149;
+}
+.path-act-btn.cancel:hover {
+  background: rgba(248, 81, 73, 0.1);
+}
+.path-act-btn.save {
+  color: #10b981;
+}
+.path-act-btn.save:hover {
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.file-tree-container {
+  background: var(--card-color);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 10px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 120px;
+  max-height: 240px;
+}
+.tree-loading {
+  font-size: 11.5px;
+  color: var(--text-color-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px;
+}
+.pulse-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--primary-color);
+  animation: pulse-ani 1.5s infinite ease-in-out;
+}
+@keyframes pulse-ani {
+  0%, 100% { opacity: .4; transform: scale(.85); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+.tree-empty {
+  font-size: 11.5px;
+  color: var(--text-color-3);
+  text-align: center;
+  padding: 24px 12px;
+  opacity: .75;
+}
+.tree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 刷新旋转动画 */
+.refresh-btn svg.pulsing {
+  animation: spin-ani 1.2s infinite linear;
+}
+@keyframes spin-ani {
+  to { transform: rotate(360deg); }
 }
 
 /* ===== 4. 高危人机协作审批阻断弹窗 (HITL Glass-Modal) ===== */

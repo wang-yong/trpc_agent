@@ -80,6 +80,17 @@ async function request<T>(url: string, opts: RequestInit = {}): Promise<T> {
   return resp.json()
 }
 
+export interface UserSettings {
+  workspace_root: string
+}
+
+export interface FileNode {
+  name: string
+  path: string
+  is_dir: boolean
+  children?: FileNode[]
+}
+
 export const api = {
   getModels: () => request<ModelsResponse>('/api/models'),
   getSkills: () => request<Skill[]>('/api/skills'),
@@ -91,6 +102,9 @@ export const api = {
   getTokenStats: () => request<TokenStats>('/api/token-stats'),
   respondApproval: (id: string, approve: boolean) =>
     request<{ ok: boolean }>('/api/approvals/respond', { method: 'POST', body: JSON.stringify({ id, approve }) }),
+  getSettings: () => request<UserSettings>('/api/settings'),
+  saveSettings: (root: string) => request<{ ok: boolean }>('/api/settings', { method: 'POST', body: JSON.stringify({ workspace_root: root }) }),
+  getWorkspaceFiles: () => request<{ workspace_root: string, files: FileNode[] }>('/api/workspace/files'),
 }
 
 /** SSE 流式聊天 */
