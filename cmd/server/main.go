@@ -124,8 +124,8 @@ func (l *LoggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 			sessionID, _ = val.(string)
 		}
 
-		_ = os.MkdirAll("bin", 0755)
-		logFile, logErr := os.OpenFile("bin/llm_io.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		_ = os.MkdirAll("bin/log", 0755)
+		logFile, logErr := os.OpenFile("bin/log/llm_io.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 		if logErr == nil {
 			_, _ = logFile.WriteString("\n========================================================================\n")
 			fmt.Fprintf(logFile, "[TIMESTAMP]   %s\n", time.Now().Format("2006-01-02 15:04:05"))

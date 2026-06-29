@@ -1,10 +1,11 @@
-// Package web 提供网络交互工具，使 Agent 能够发起 HTTP 请求、抓取网页纯文本，以及进行免费免 Key 的 DuckDuckGo 网页检索。
+// Package web 提供网络交互工具，使 Agent 能够发起 HTTP 请求、抓取网页纯文本，以及进行免费免 Key 的网页检索。
 package web
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -43,13 +44,13 @@ type WebScrapeOutput struct {
 
 // WebSearchInput 网页检索输入。
 type WebSearchInput struct {
-	Query string `json:"query" description:"搜索关键字（如 'Golang 1.24 新特性'，将调用免 Key DuckDuckGo 服务进行实时全球检索）"`
+	Query string `json:"query" description:"搜索关键字（如 'Golang 1.24 新特性'，将调用免 Key 搜索引擎服务进行实时全球检索）"`
 }
 
 // SearchResult 结构化单条检索结果。
 type SearchResult struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
+	Title   string `json:"title"`
+	URL     string `json:"url"`
 	Snippet string `json:"snippet"`
 }
 
@@ -62,6 +63,24 @@ type WebSearchOutput struct {
 // client 全局复用带超时限制的 HTTP 客户端
 var client = &http.Client{
 	Timeout: 15 * time.Second,
+}
+
+// setBrowserHeaders 设置浏览器请求头
+func setBrowserHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("Cache-Control", "max-age=0")
+	req.Header.Set("Sec-Ch-Ua", `"Google Chrome";v="121", "Chromium";v="121", "Not_A Brand";v="24"`)
+	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+	req.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
 }
 
 // ExecuteHTTPRequest 发起通用 HTTP/HTTPS 网络请求。
@@ -188,47 +207,203 @@ func ScrapeWebPage(ctx context.Context, input WebScrapeInput) (WebScrapeOutput, 
 	}, nil
 }
 
-// SearchWeb 调用免 Key 的 DuckDuckGo HTML 搜索界面，对全网信息进行实时高并发搜索。
+// SearchWeb 调用免 Key 的搜索引擎进行实时搜索，支持 DuckDuckGo、Google、百度三引擎自动切换。
 func SearchWeb(ctx context.Context, input WebSearchInput) (WebSearchOutput, error) {
-	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", url.QueryEscape(input.Query))
-	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
-	if err != nil {
-		return WebSearchOutput{}, err
+	// 随机选择搜索引擎，避免被单一搜索引擎封禁
+	rand.Seed(time.Now().UnixNano())
+	engines := []string{"duckduckgo", "google", "baidu"}
+	engine := engines[rand.Intn(len(engines))]
+
+	fmt.Printf("[WEB_SEARCH] 开始搜索: '%s', 随机选择主引擎: %s\n", input.Query, engine)
+
+	var results []SearchResult
+	var err error
+
+	switch engine {
+	case "duckduckgo":
+		results, err = searchDuckDuckGo(ctx, input.Query)
+	case "google":
+		results, err = searchGoogle(ctx, input.Query)
+	case "baidu":
+		results, err = searchBaidu(ctx, input.Query)
 	}
 
-	// 模拟老牌主流浏览器 User-Agent，确保百分百不会被 DuckDuckGo WAF 拦截阻断
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	if err != nil {
+		fmt.Printf("[WEB_SEARCH] 主引擎 %s 执行失败: %v\n", engine, err)
+	} else {
+		fmt.Printf("[WEB_SEARCH] 主引擎 %s 执行成功，获取到 %d 条结果\n", engine, len(results))
+	}
+
+	// 如果第一个引擎失败或无结果，尝试其他引擎
+	if err != nil || len(results) == 0 {
+		fmt.Printf("[WEB_SEARCH] 准备进入备用引擎轮询...\n")
+		for _, fallback := range engines {
+			if fallback == engine {
+				continue
+			}
+			fmt.Printf("[WEB_SEARCH] 尝试备用引擎: %s\n", fallback)
+			var fallbackResults []SearchResult
+			var fallbackErr error
+			switch fallback {
+			case "duckduckgo":
+				fallbackResults, fallbackErr = searchDuckDuckGo(ctx, input.Query)
+			case "google":
+				fallbackResults, fallbackErr = searchGoogle(ctx, input.Query)
+			case "baidu":
+				fallbackResults, fallbackErr = searchBaidu(ctx, input.Query)
+			}
+			if fallbackErr != nil {
+				fmt.Printf("[WEB_SEARCH] 备用引擎 %s 执行失败: %v\n", fallback, fallbackErr)
+			} else {
+				fmt.Printf("[WEB_SEARCH] 备用引擎 %s 执行成功，获取到 %d 条结果\n", fallback, len(fallbackResults))
+			}
+			if fallbackErr == nil && len(fallbackResults) > 0 {
+				results = fallbackResults
+				break
+			}
+		}
+	}
+
+	// 如果仍然完全没搜到，提供友好兜底
+	if len(results) == 0 {
+		fmt.Printf("[WEB_SEARCH] 悲剧！所有引擎均未获取到有效结果，输出友好兜底卡片。\n")
+		return WebSearchOutput{
+			Query: input.Query,
+			Results: []SearchResult{
+				{
+					Title:   "实时搜索暂无发现",
+					URL:     "https://www.google.com/search?q=" + url.QueryEscape(input.Query),
+					Snippet: "所有搜索引擎在当前环境下均未返回结果，建议稍后重试或更换关键词。",
+				},
+			},
+		}, nil
+	}
+
+	return WebSearchOutput{
+		Query:   input.Query,
+		Results: results,
+	}, nil
+}
+
+// searchDuckDuckGo 使用 DuckDuckGo HTML 搜索
+func searchDuckDuckGo(ctx context.Context, query string) ([]SearchResult, error) {
+	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", url.QueryEscape(query))
+	fmt.Printf("[DDG] 发起请求: %s\n", searchURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	setBrowserHeaders(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return WebSearchOutput{}, fmt.Errorf("搜索网络超时或阻断: %v", err)
+		fmt.Printf("[DDG] 请求异常: %v\n", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
+	fmt.Printf("[DDG] 响应状态码: %s, 长度: %d\n", resp.Status, resp.ContentLength)
+
+	if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("DuckDuckGo 返回状态码: %d", resp.StatusCode)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return WebSearchOutput{}, fmt.Errorf("搜索响应异常: %s", resp.Status)
+		return nil, fmt.Errorf("DuckDuckGo 响应异常: %s", resp.Status)
 	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return WebSearchOutput{}, err
+		return nil, err
 	}
 
-	body := string(bodyBytes)
+	res := parseDuckDuckGoResults(string(bodyBytes))
+	fmt.Printf("[DDG] 成功解析出 %d 条结果\n", len(res))
+	return res, nil
+}
 
-	// 极度鲁棒的正规表达式：用来从 DuckDuckGo 简洁好读的 HTML 布局中提取搜索条目
-	// 每一个搜索条目都被包在 `<div class="result body">` 或 `<div class="links_main">`
-	// 我们可以提取其 Title、Url 和 Snippet
+// searchGoogle 使用 Google 搜索
+func searchGoogle(ctx context.Context, query string) ([]SearchResult, error) {
+	searchURL := fmt.Sprintf("https://www.google.com/search?q=%s&num=10&hl=zh-CN", url.QueryEscape(query))
+	fmt.Printf("[GOOGLE] 发起请求: %s\n", searchURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	setBrowserHeaders(req)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("[GOOGLE] 请求异常: %v\n", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	fmt.Printf("[GOOGLE] 响应状态码: %s\n", resp.Status)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Google 响应异常: %s", resp.Status)
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	res := parseGoogleResults(string(bodyBytes))
+	fmt.Printf("[GOOGLE] 成功解析出 %d 条结果\n", len(res))
+	return res, nil
+}
+
+// searchBaidu 使用百度搜索
+func searchBaidu(ctx context.Context, query string) ([]SearchResult, error) {
+	searchURL := fmt.Sprintf("https://www.baidu.com/s?wd=%s", url.QueryEscape(query))
+	fmt.Printf("[BAIDU] 发起请求: %s\n", searchURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	setBrowserHeaders(req)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("[BAIDU] 请求异常: %v\n", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	fmt.Printf("[BAIDU] 响应状态码: %s, 长度: %d\n", resp.Status, resp.ContentLength)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("百度响应异常: %s", resp.Status)
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	res := parseBaiduResults(string(bodyBytes))
+	fmt.Printf("[BAIDU] 成功解析出 %d 条结果\n", len(res))
+	return res, nil
+}
+
+// parseDuckDuckGoResults 解析 DuckDuckGo 搜索结果
+func parseDuckDuckGoResults(body string) []SearchResult {
 	var results []SearchResult
 
-	// 极度鲁棒的宽松型正则表达式，不强制限制 class 与 href 的绝对顺序或引号类型
+	// 极其精确且鲁棒的 regex 捕获
 	linkReg := regexp.MustCompile(`(?s)<a\s+[^>]*class="[^"]*result__a[^"]*"\s+href="([^"]*)"[^>]*>(.*?)</a>`)
 	snippetReg := regexp.MustCompile(`(?s)<a\s+[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>`)
 
-	// 按照每个结果块切分（兼容 class="result" 或 links_main 等各种静态 HTML 渲染特征）
+	// 按照真正的结果卡片块进行切分，防止标签被撕裂破坏正则匹配
 	var blocks []string
-	if strings.Contains(body, "class=\"result") {
+	if strings.Contains(body, "class=\"result results_links") {
+		blocks = strings.Split(body, "class=\"result results_links")
+	} else if strings.Contains(body, "class=\"result") {
 		blocks = strings.Split(body, "class=\"result")
 	} else if strings.Contains(body, "class=\"links_main") {
 		blocks = strings.Split(body, "class=\"links_main")
@@ -237,7 +412,7 @@ func SearchWeb(ctx context.Context, input WebSearchInput) (WebSearchOutput, erro
 	}
 
 	// 遍历前 8-10 个切片，提取搜索信息
-	for i := 1; i < len(blocks) && len(results) < 8; i++ {
+	for i := 1; i < len(blocks) && len(results) < 10; i++ {
 		block := blocks[i]
 
 		linkMatches := linkReg.FindStringSubmatch(block)
@@ -248,15 +423,24 @@ func SearchWeb(ctx context.Context, input WebSearchInput) (WebSearchOutput, erro
 		rawURL := linkMatches[1]
 		title := linkMatches[2]
 
-		// 解析 DuckDuckGo 内嵌的跳转 URL，如 /l/?kh=-1&uddg=https%3A%2F%2Fexample.com
+		// 解析 DuckDuckGo 内嵌的跳转 URL，清洗多余的跟踪参数
 		if strings.Contains(rawURL, "uddg=") {
 			parts := strings.Split(rawURL, "uddg=")
 			if len(parts) > 1 {
-				decoded, err := url.QueryUnescape(parts[1])
+				urlAndParams := parts[1]
+				if idx := strings.Index(urlAndParams, "&"); idx != -1 {
+					urlAndParams = urlAndParams[:idx]
+				}
+				decoded, err := url.QueryUnescape(urlAndParams)
 				if err == nil {
 					rawURL = decoded
 				}
 			}
+		}
+
+		// 过滤掉本地内部跳转 URL
+		if strings.HasPrefix(rawURL, "//duckduckgo.com/l/?") {
+			continue
 		}
 
 		// 剥离标题里的 HTML 标签
@@ -278,60 +462,80 @@ func SearchWeb(ctx context.Context, input WebSearchInput) (WebSearchOutput, erro
 		})
 	}
 
-	// 如果免 Key 的 DuckDuckGo 被防火墙阻断、返回空结果，立即执行百度实时搜索引擎自动自愈！
-	if len(results) == 0 {
-		baiduResults, err := SearchBaidu(ctx, input.Query)
-		if err == nil && len(baiduResults) > 0 {
-			results = baiduResults
-		}
-	}
-
-	// 如果仍然完全没搜到，提供友好兜底
-	if len(results) == 0 {
-		return WebSearchOutput{
-			Query: input.Query,
-			Results: []SearchResult{
-				{
-					Title:   "实时搜索暂无发现",
-					URL:     "https://duckduckgo.com",
-					Snippet: "由于第三方搜索引擎接口在当前运行环境下未能成功返回静态结果，建议老公重试或更换更加具体的关键词。",
-				},
-			},
-		}, nil
-	}
-
-	return WebSearchOutput{
-		Query:   input.Query,
-		Results: results,
-	}, nil
+	return results
 }
 
-// SearchBaidu 作为备用搜索引擎，在 DuckDuckGo 遭受 WAF 拦截或无结果时自动自愈。
-func SearchBaidu(ctx context.Context, query string) ([]SearchResult, error) {
-	searchURL := fmt.Sprintf("https://www.baidu.com/s?wd=%s", url.QueryEscape(query))
-	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	body := string(bodyBytes)
+// parseGoogleResults 解析 Google 搜索结果
+func parseGoogleResults(body string) []SearchResult {
 	var results []SearchResult
 
-	// 匹配百度搜索的 H3 标题块和摘要快
+	// 匹配 Google 搜索结果
+	linkReg := regexp.MustCompile(`(?s)<a\s+href="(/url\?q=([^&]*)[^"]*)"[^>]*class="[^"]*"[^>]*>(.*?)</a>`)
+
+	// 按搜索结果块切分
+	blocks := strings.Split(body, "class=\"g\"")
+	if len(blocks) <= 1 {
+		blocks = strings.Split(body, "data-href=\"")
+	}
+
+	for i := 1; i < len(blocks) && len(results) < 8; i++ {
+		block := blocks[i]
+
+		linkMatches := linkReg.FindStringSubmatch(block)
+		if len(linkMatches) < 4 {
+			// 尝试另一种匹配方式
+			h3Reg := regexp.MustCompile(`(?s)<h3[^>]*class="[^"]*"[^>]*>(.*?)</h3>`)
+			h3Matches := h3Reg.FindStringSubmatch(block)
+			if len(h3Matches) < 2 {
+				continue
+			}
+			title := regexp.MustCompile(`<.*?>`).ReplaceAllString(h3Matches[1], "")
+			title = strings.TrimSpace(title)
+
+			// 提取 URL
+			urlReg := regexp.MustCompile(`href="(https?://[^"]+)"`)
+			urlMatches := urlReg.FindStringSubmatch(block)
+			if len(urlMatches) < 2 {
+				continue
+			}
+			rawURL := urlMatches[1]
+
+			// 提取摘要
+			snippetReg := regexp.MustCompile(`(?s)<span[^>]*>[^<]*<span[^>]*>(.*?)</span>[^<]*</span>`)
+			snippetMatches := snippetReg.FindStringSubmatch(block)
+			snippet := "无描述"
+			if len(snippetMatches) > 1 {
+				snippet = regexp.MustCompile(`<.*?>`).ReplaceAllString(snippetMatches[1], "")
+				snippet = strings.TrimSpace(snippet)
+			}
+
+			results = append(results, SearchResult{
+				Title:   title,
+				URL:     rawURL,
+				Snippet: snippet,
+			})
+			continue
+		}
+
+		rawURL := linkMatches[2]
+		title := regexp.MustCompile(`<.*?>`).ReplaceAllString(linkMatches[3], "")
+		title = strings.TrimSpace(title)
+
+		results = append(results, SearchResult{
+			Title:   title,
+			URL:     rawURL,
+			Snippet: "无描述",
+		})
+	}
+
+	return results
+}
+
+// parseBaiduResults 解析百度搜索结果
+func parseBaiduResults(body string) []SearchResult {
+	var results []SearchResult
+
+	// 匹配百度搜索的 H3 标题块和摘要块
 	h3Reg := regexp.MustCompile(`(?s)<h3[^>]*class="[^"]*t[^"]*"[^>]*>.*?<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>`)
 	abstractReg := regexp.MustCompile(`(?s)<div[^>]*class="[^"]*c-abstract[^"]*"[^>]*>(.*?)</div>`)
 	if !strings.Contains(body, "c-abstract") {
@@ -369,7 +573,7 @@ func SearchBaidu(ctx context.Context, query string) ([]SearchResult, error) {
 		})
 	}
 
-	return results, nil
+	return results
 }
 
 // NewHTTPRequestTool 创建 HTTP 请求工具。
@@ -395,6 +599,6 @@ func NewWebSearchTool() tool.Tool {
 	return function.NewFunctionTool(
 		SearchWeb,
 		function.WithName("web_search"),
-		function.WithDescription("调用免费、免 API Key 的 DuckDuckGo 网页检索接口，获取全网最新最相关的搜索条目（标题、URL、描述），使你拥有实时联网检索的能力"),
+		function.WithDescription("调用免费、免 API Key 的搜索引擎（DuckDuckGo/Google/百度）进行实时网页检索，获取全网最新最相关的搜索条目（标题、URL、描述）"),
 	)
 }

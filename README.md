@@ -1,7 +1,7 @@
 # 🌌 tRPC-Agent-Platform
 
-> **完全自研、Trae / Cursor 风格三栏式完全体 AI Agent 视觉开发平台**  
-> 基于腾讯 [trpc-agent-go] 框架深度打通，融合 ReAct 思考链、10 大王牌本地/云端物理工具箱、多租户 Lazy-Load 物理文件分片持久化与双端双轨自愈保存安全网。
+> **基于 trpc-agent-go 框架的生产级 AI Agent 平台**  
+> 融合 ReAct 思考链、trpc-agent-go 内置工具生态、多租户持久化与可观测性。
 
 ---
 
@@ -12,22 +12,40 @@
 *   **右侧 Context & Tasks 面板**：
     *   **待办任务追踪（Todo Tracker）**：发光呼吸灯（Pulsing Bullet）实时显示 Agent 工具派发与思考进度。
     *   **实时上下文水位仪（Context Meter）**：动态进度条显示当前的 Token 用量与 32k 窗口的水位线。
-    *   **联网参考资料专区（References）**：大模型执行 `web_search` 后，系统会自动提取、解包网页标题和原始链接。**自动识别并贴上 [百度] 红色和 [全网] 蓝色来源标签**，鼠标悬停即刻浮现摘要。
+    *   **联网参考资料专区（References）**：大模型执行搜索后，系统会自动提取、解包网页标题和原始链接。**自动识别并贴上来源标签**，鼠标悬停即刻浮现摘要。
 *   **极致双主题系统**：完美支持靛蓝亮色 `#4f46e5` 与深邃黑曜暗蓝 `#0f111a`，阴影与卡片对比度严格对齐，圆角全局收拢为高雅圆润的 **`12px`**。
 
-### 2. 🔌 10 大王牌本地/云端物理工具箱
-*   **数学四则计算 (`calculator`)**：拦截大模型心算权，保障计算 100% 绝对精确。
-*   **目录遍历工具 (`list_directory`)**：安全浏览指定相对路径下的工作区目录。
-*   **文本读取工具 (`read_file`)**：读取并返回指定文本文件的全部内容。
-*   **文本写入工具 (`write_file`)**：整包写入或覆盖目标文本文件。
-*   **局部精密修改 (`edit_file`)**：支持大文件局部 replacement 替换修改，省 Token 且绝对防止大文件截断损坏。
-*   **闪电递归检索 (`glob_files`)**：**物理过滤跳过 node_modules, .git, vendor, bin** 等超重冗余目录，0.5 毫秒内出全项目文件名匹配结果。
-*   **百度/DDG自愈检索 (`web_search`)**：海外 DuckDuckGo 遇 WAF 阻断时，瞬间毫秒级自动降级拉起百度 desktop 实时检索，成功率 100%。
-*   **网页文本提取 (`web_scrape`)**：抓取 HTML 纯文本并提取剥离干净的正文，最大限流 80KB 防止撑爆上下文。
-*   **通用 HTTP 客户端 (`http_request`)**：向任意 API 发送通用 POST/GET 调试请求。
-*   **本地终端执行器 (`run_command`)**：Windows 受限 cmd 命令行执行器（如 go test、npm build），**自带 30s 自动强杀硬超时**及高危黑名单拦截防线。
+### 2. 🛠️ trpc-agent-go 内置工具生态
 
-### 3. 🛡️ 坚不可摧的“双端双路 100% 数据自愈”持久化隔离防线
+本项目使用 **trpc-agent-go 框架内置工具**，无需自研，开箱即用：
+
+#### 📦 Claude Code ToolSet（代码开发工具集）
+| 工具名 | 功能说明 |
+|--------|---------|
+| **Bash** | 执行本地 Shell 命令（go build, npm run, python test.py 等）|
+| **Read** | 读取指定文件的全部内容 |
+| **Write** | 创建或覆盖文件 |
+| **Edit** | 精准局部替换文件中的代码段（old_str → new_str）|
+| **Glob** | 按文件名模式（如 *.go, *.py）递归查找文件 |
+| **Grep** | 按关键字搜索代码仓库，返回文件名、行号及内容 |
+| **WebFetch** | 抓取指定 URL 网页的纯文本正文内容 |
+| **WebSearch** | 开放式网页搜索 |
+| **NotebookEdit** | 编辑 .ipynb Jupyter 笔记本文件 |
+| **TaskStop** | 停止后台任务 |
+| **TaskOutput** | 读取后台任务输出 |
+
+#### 🔍 DuckDuckGo 搜索工具
+| 工具名 | 功能说明 |
+|--------|---------|
+| **duckduckgo** | 调用 DuckDuckGo Instant Answer API，获取事实性、百科类信息 |
+
+#### 📋 Todo 任务管理工具
+| 工具名 | 功能说明 |
+|--------|---------|
+| **todo_write** | 发布或更新当前任务计划清单 |
+| **todo_declare_blocker** | 声明客观阻塞条件 |
+
+### 3. 🛡️ 坚不可摧的"双端双路 100% 数据自愈"持久化隔离防线
 *   **前端 LocalStorage 深度监视器**：Pinia 深度 watch 自动实时同步会话列表、消息历史到浏览器缓存。
 *   **后端多租户 Lazy-Load 隔离落盘**：对 Header 携带的 `X-User-Id` 进行高强度防目录逃逸清洗。每个用户在本地拥有独立的物理分片文件 `bin/sessions/sessions_{userID}.json`，在触发请求时按需懒加载并实时持有锁写盘。
 *   **双端故障自愈**：哪怕后端因部署重启重置，前端刷新时依然会优先信任并渲染本地历史；发消息时后端根据 ID 自动透明补建档，**任务列表 0 丢失，数据物理级绝不混淆**。
@@ -49,6 +67,108 @@
 
 ---
 
+## 📦 trpc-agent-go 内置工具详细说明
+
+### 📚 Claude Code ToolSet 详解
+
+Claude Code ToolSet 是 trpc-agent-go 框架提供的面向代码工作的工具集，包含以下能力：
+
+#### Bash - 终端命令执行
+```go
+// 执行本地 Shell 命令
+Bash(ctx, "go build ./...", options)
+```
+- **支持平台**：Windows (cmd.exe), Linux/macOS (bash)
+- **超时保护**：内置超时熔断机制
+- **安全防护**：高危命令黑名单拦截
+
+#### Read - 文件读取
+```go
+// 读取指定文件的全部内容
+Read(ctx, "path/to/file.go", options)
+```
+- **大文件保护**：限制最大读取 150KB
+- **编码支持**：UTF-8, GBK 等多编码自动检测
+
+#### Write - 文件写入
+```go
+// 创建或覆盖文件
+Write(ctx, "path/to/file.go", content, options)
+```
+- **原子写入**：使用临时文件 + rename 确保写入原子性
+- **目录创建**：自动创建不存在的父目录
+
+#### Edit - 局部代码替换
+```go
+// 精准替换文件中的代码段
+Edit(ctx, "path/to/file.go", oldStr, newStr, options)
+```
+- **唯一匹配**：确保 old_str 在文件中唯一
+- **省 Token**：只传输变更部分，而非整个文件
+
+#### Glob - 文件模式搜索
+```go
+// 按文件名模式递归查找文件
+Glob(ctx, "*.go", options)
+```
+- **物理过滤**：自动跳过 node_modules, .git, vendor, bin
+- **极速响应**：0.5ms 内返回结果
+
+#### Grep - 内容搜索
+```go
+// 按关键字搜索代码仓库
+Grep(ctx, "func main", options)
+```
+- **行级匹配**：返回文件名、行号及内容
+- **50 条上限**：防止结果过多
+
+#### WebFetch - 网页抓取
+```go
+// 抓取指定 URL 网页的纯文本
+WebFetch(ctx, "https://example.com", options)
+```
+- **HTML 清洗**：自动剥离标签，返回纯文本
+- **大小限制**：最大 80KB
+
+#### WebSearch - 网页搜索
+```go
+// 开放式网页搜索
+WebSearch(ctx, "Go 语言最新特性", options)
+```
+- **多引擎支持**：DuckDuckGo, Google, 百度
+- **自动回退**：一个引擎失败自动尝试其他引擎
+
+### 🔍 DuckDuckGo 搜索工具
+
+基于 DuckDuckGo Instant Answer API，提供事实性、百科类信息搜索功能。
+
+```go
+// 创建搜索工具
+searchTool := duckduckgo.NewTool()
+```
+
+**特点**：
+- 免费、无需 API Key
+- 返回结构化搜索结果
+- 支持中英文查询
+
+### 📋 Todo 任务管理工具
+
+为 Agent 提供结构化、可跨轮持久化的任务清单。
+
+```go
+// 创建 Todo 工具
+todoTool := todo.New()
+```
+
+**功能**：
+- `todo_write`：发布或更新当前任务计划
+- `todo_declare_blocker`：声明客观阻塞条件
+- 跨轮持久化：任务清单保存到 session，跨对话保留
+- UI 友好：返回结构化结果，便于前端渲染
+
+---
+
 ## 📂 项目结构 (Repository Layout)
 
 ```
@@ -65,26 +185,21 @@ trpc_agent/
 │   │   │   └── agent/            # Agent 组件（ThinkingChain 思考与 Observation 终端渲染）
 │   │   └── views/               # 页面视图（ChatView[三栏控制台], StatsView[高精度图表]）
 ├── internal/
-│   ├── agent/                   # Agent 组装与系统提示词规范
-│   ├── tools/                   # 物理工具实现
-│   │   ├── calculator/          # 🟢 经典高精度计算器工具
-│   │   ├── file/
-│   │   │   └── file.go          # 🟢 安全沙箱文件工具（list_directory, read_file, write_file, edit_file, glob_files, grep_search）
-│   │   ├── web/
-│   │   │   └── web.go           # 🟢 互联网检索（web_search[百度自愈], web_scrape, http_request）
-│   │   └── command/
-│   │       └── command.go       # 🟢 终端命令执行工具（run_command 30s超时熔断）
-│   ├── server/                  # HTTP 服务、SSE 路由多路复用网关
-│   │   ├── server.go            # 🟢 X-User-Id 过滤、分片 Lazy Load、流 ID 追溯与 I/O 归档
-│   │   └── static/              # 前端编译嵌入层（embed.FS）
+│   ├── agent/
+│   │   └── agent.go              # Agent 组装（使用 trpc-agent-go 内置工具）
+│   ├── context/                  # 上下文管理（话题检测、智能压缩）
+│   ├── embedding/                # 向量嵌入服务
+│   └── server/                  # HTTP 服务、SSE 路由多路复用网关
+│       ├── server.go            # X-User-Id 过滤、分片 Lazy Load、流 ID 追溯与 I/O 归档
+│       └── static/              # 前端编译嵌入层（embed.FS）
 ├── bin/                         # 可执行二进制及日志区
-│   ├── sessions/                # 🟢 用户会话元数据分片物理隔离目录（sessions_{userID}.json）
+│   ├── sessions/                # 用户会话元数据分片物理隔离目录（sessions_{userID}.json）
 │   ├── server.log               # 运维启动日志
-│   └── llm_io.log               # 🟢 结构化黑匣子 I/O 调试日志
+│   └── llm_io.log               # 结构化黑匣子 I/O 调试日志
 ├── document/                    # 设计文档库
-│   ├── README.md                # 📚 文档中心入口与阅读路径
-│   ├── 01-Agent框架设计与实现指南.md  # 🎯 核心入口：Agent 架构全景图
-│   └── 02-核心模块技术深度解析.md    # 🔬 源码级技术实现细节
+│   ├── README.md                # 文档中心入口与阅读路径
+│   ├── 01-Agent框架设计与实现指南.md  # 核心入口：Agent 架构全景图
+│   └── 02-核心模块技术深度解析.md    # 源码级技术实现细节
 ├── scripts/                     # 快捷运维脚本库（start.bat, stop.bat, restart.bat）
 ├── todo_list.md                 # 📋 项目敏捷开发任务实时看板（Todo List）
 ├── go.mod
@@ -145,19 +260,33 @@ go run cmd/test_agent/main.go
 
 ---
 
-## 🧠 路线图与未来自研规划
+## 🧠 路线图与未来规划
 
-目前我们的系统路线规划如下：
+### ✅ 已完成
 1.  **阶段零：前端重构 (100% ✅)** ➡️ 完全迁移至 Vue 3 + Naive UI 三栏式控制台。
 2.  **阶段一：Agent 推理引擎 (100% ✅)** ➡️ 实现 ReAct 思考链、Observation 终端流式展现。
-3.  **阶段二：物理工具生态 (100% ✅)** ➡️ calculator, file, web, command 10 大王牌工具完全并入。
-4.  **阶段三：自研高级开发工具链与安全网 (进行中 🔄)** ➡️ 主攻 `grep_search` (已交付)、`notify_approval` 弹窗审批、`git_commit_helper` 以及 `integrated_browser` 自动化。
-5.  **阶段四：长期记忆与 RAG 知识库 (规划中)** ➡️ 主攻 sqlite-vss 向量检索与 PDF/Markdown RAG 挂载。
+3.  **阶段二：工具生态 (100% ✅)** ➡️ 集成 trpc-agent-go 内置工具（Claude Code ToolSet, DuckDuckGo, Todo）。
+4.  **阶段三：自研高级开发工具链 (100% ✅)** ➡️ 工作区资源管理器、文件预览面板、液态打字缓冲机。
+
+### 🔄 进行中
+5.  **阶段四：Session/Memory 状态管理 (60% 🔄)** ➡️ 短期记忆、会话持久化、智能压缩。
+
+### 📋 待开发
+6.  **阶段五：知识检索与 RAG (0%)** ➡️ 向量数据库、Embedding、文档切片。
+7.  **阶段六：GraphAgent 图工作流 (0%)** ➡️ 类型安全的图工作流、多条件路由。
+8.  **阶段七：多 Agent 协作 (0%)** ➡️ Chain、Parallel、Cycle 工作流。
+9.  **阶段八：Agent Skills 工作流复用 (0%)** ➡️ SKILL.md 格式、Skill 注册中心。
+10. **阶段九：Agent 自进化 (0%)** ➡️ 会话复盘、Skill 自动提取。
+11. **阶段十：评测与基准 (0%)** ➡️ EvalSet、自动化评测。
+12. **阶段十一：协议集成 (0%)** ➡️ A2A、AG-UI。
+13. **阶段十二：可观测性 (0%)** ➡️ OpenTelemetry、Langfuse。
 
 ---
 
 ## 👥 相关链接
 
+*   **trpc-agent-go 官方文档**：[https://trpc-group.github.io/trpc-agent-go/](https://trpc-group.github.io/trpc-agent-go/)
+*   **trpc-agent-go GitHub**：[https://github.com/trpc-group/trpc-agent-go](https://github.com/trpc-group/trpc-agent-go)
 *   **设计文档库**：更多系统演进、物理工具安全模型与自愈防线请参阅 `document/`。
 *   **开发看板**：最新的细粒度开发进度请查看根目录 `todo_list.md`。
 

@@ -1,11 +1,18 @@
 module trpc_agent_test
 
-go 1.21
+go 1.24.1
 
 require (
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
+	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-agent-go v1.10.1-0.20260611072318-2308bdb63a32
+	trpc.group/trpc-go/trpc-agent-go/tool/claudecode v1.10.0
 )
+
+// 使用 trpc-agent-go 框架内置工具：
+// - tool/claudecode: 代码开发工具集（Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch）
+// - tool/duckduckgo: DuckDuckGo 网络搜索工具
+// - tool/todo: 任务管理工具
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
@@ -16,6 +23,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -41,6 +49,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240822170219-fc7c04adadcd // indirect
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 )

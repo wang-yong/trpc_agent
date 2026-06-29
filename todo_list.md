@@ -7,28 +7,73 @@
 
 ---
 
-## 📊 tRPC-Agent-Go 框架功能对照分析
+## 📊 Agent 工具能力清单
 
-### 已实现 vs 待实现功能总览
+### 🎯 当前 Agent 拥有的工具能力
 
-| 功能类别 | tRPC-Agent-Go 特性 | 实现状态 | 完成度 |
-|---------|-------------------|---------|--------|
-| **Go-Native Agent Runtime** | 流式 Runner、context cancel | ✅ 已实现 | 100% |
-| **LLM Agent** | 基础 Agent、工具调用、ReAct 推理 | ✅ 已实现 | 100% |
-| **Session/Memory** | 短期记忆、会话持久化 | ✅ 已实现 | 60% |
-| **知识检索** | RAG、向量数据库 | ❌ 未实现 | 0% |
-| **GraphAgent** | 图工作流、多条件路由 | ❌ 未实现 | 0% |
-| **多 Agent 协作** | Chain、Parallel、Cycle 工作流 | ❌ 未实现 | 0% |
-| **Agent Skills** | SKILL.md 工作流复用 | ❌ 未实现 | 0% |
-| **Agent 自进化** | Hermes-style 会话复盘 | ❌ 未实现 | 0% |
-| **Prompt Caching** | 自动优化成本 | ❌ 未实现 | 0% |
-| **评测与基准** | EvalSet + Metric | ❌ 未实现 | 0% |
-| **协议集成** | A2A、AG-UI、MCP | ❌ 未实现 | 0% |
-| **可观测性** | OpenTelemetry tracing、metrics | ❌ 未实现 | 0% |
+本项目使用 **trpc-agent-go 框架内置工具**，开箱即用，无需自研。
+
+| 工具分类 | 工具名 | 功能说明 | 来源 |
+|---------|--------|---------|------|
+| **代码开发** | `Bash` | 执行本地 Shell 命令（go build, npm run 等）| claudecode |
+| | `Read` | 读取指定文件的全部内容 | claudecode |
+| | `Write` | 创建或覆盖文件 | claudecode |
+| | `Edit` | 精准局部替换文件中的代码段 | claudecode |
+| | `Glob` | 按文件名模式递归查找文件 | claudecode |
+| | `Grep` | 按关键字搜索代码仓库 | claudecode |
+| | `WebFetch` | 抓取指定 URL 网页纯文本（可获取最新信息）| claudecode |
+| | `WebSearch` | 开放式网页搜索 | claudecode |
+| | `NotebookEdit` | 编辑 .ipynb Jupyter 笔记本 | claudecode |
+| | `TaskStop` | 停止后台任务 | claudecode |
+| | `TaskOutput` | 读取后台任务输出 | claudecode |
+| **网络搜索** | `duckduckgo` | DuckDuckGo 百科/事实性信息搜索（不适合最新新闻）| duckduckgo |
+| **任务管理** | `todo_write` | 发布或更新任务计划清单 | todo |
+| | `todo_declare_blocker` | 声明客观阻塞条件 | todo |
+
+### 📝 搜索策略说明
+
+**DuckDuckGo Instant Answer API 的限制**：
+- ✅ 适合：百科信息、定义查询、人物/公司信息、数学计算
+- ❌ 不适合：最新新闻、实时信息、2024年后的最新内容
+
+**获取最新信息的策略**：
+1. 首先尝试 duckduckgo 搜索
+2. 如果返回空结果或不适合，使用 WebFetch 抓取以下网站：
+   - GitHub Trending: https://github.com/trending
+   - Hacker News: https://news.ycombinator.com
+   - GitHub 搜索: https://github.com/search?q=关键词
+
+### 📦 工具集使用方式
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/tool/claudecode"
+    "trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo"
+    "trpc.group/trpc-go/trpc-agent-go/tool/todo"
+)
+
+// Claude Code ToolSet
+codeToolSet, _ := claudecode.NewToolSet(
+    claudecode.WithBaseDir("."),     // 工作目录
+    claudecode.WithReadOnly(false),  // 启用写入
+)
+
+// DuckDuckGo 搜索
+searchTool := duckduckgo.NewTool()
+
+
+
+// Todo 任务管理
+todoTool := todo.New()
+
+// 注册到 Agent
+llmagent.WithToolSets([]tool.ToolSet{codeToolSet})
+llmagent.WithTools([]tool.Tool{searchTool, todoTool})
+```
 
 ---
 
-## 🎨 阶段零：前端重构（基础设施）- **✅ 已完成 (100%)**
+## 📂 阶段零：前端重构（基础设施）- **✅ 已完成 (100%)**
 
 - [x] 初始化 Vue 3 + Vite + Naive UI + Pinia 现代化前端开发环境
 - [x] 迁移聊天主页面：消息列表、流式渲染、会话侧边栏、模型选择
@@ -54,28 +99,33 @@
 
 ---
 
-## 📦 阶段二：工具生态（Function Tool）- **✅ 已完成 (100%)**
+## 🛠️ 阶段二：工具生态（内置工具）- **✅ 已完成 (100%)**
 
-- [x] **数学计算**：`calculator` 高精度计算器工具，拦截大模型心算，保障计算 100% 正确
-- [x] **文件系统**：列出目录树 (`list_directory`)、文本读取 (`read_file`)、写入/创建文件 (`write_file`)
-- [x] **网络检索**：网页正文抓取 (`web_scrape`)、通用 HTTP 交互客户端 (`http_request`)
-- [x] **网络检索自愈**：`web_search` 搜索引擎自愈。海外 DuckDuckGo 遇 WAF 阻断时，瞬间毫秒级自动降级拉起百度 desktop 实时检索，达率 100%
-- [x] **终端执行**：`run_command` 本地受限 Windows cmd.exe 命令行物理驱动工具，自带 30s 硬超时强杀及高危黑名单拦截防线
-- [x] **文件修改**：`edit_file` 精细手术刀局部代码段 replacement 替换工具，省 Token 且绝对防止大文件截断损坏
-- [x] **文件检索**：`glob_files` 文件全局递归查找，**物理过滤跳过 node_modules, .git, bin, vendor 等超重冗余目录**，0.5 毫秒内出结果
-- [x] **王牌检索**：`grep_search` 全局正文行级关键字极速匹配（类似 Ripgrep，带 50 条上限保护防爆，自动忽略二进制大文件）
-- [x] **安全防护 (Human-in-the-Loop)**：`notify_approval` 机制。当模型调度写文件/改文件/执行 cmd 等高危动作时，挂起 SSE 并在前端弹出阻断确认框，必须用户点击"允许"方可物理派发
+> 使用 trpc-agent-go 框架内置工具，替换自研工具
 
----
+- [x] **Claude Code ToolSet**：集成代码开发工具集（Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch）
+- [x] **DuckDuckGo 搜索工具**：集成 DuckDuckGo Instant Answer API 搜索工具
+- [x] **Todo 任务管理工具**：集成任务清单管理工具（todo_write, todo_declare_blocker）
+- [x] **移除自研工具**：删除 calculator, file, web, command 自研工具包
+- [x] **更新 Agent 组装**：使用 trpc-agent-go 内置工具替代自研工具
+- [x] **Agent-Reach 社交媒体深度抓取生态集成**：在 `internal/tools/agentreach` 包装底层 Python CLI，打通 B站视频字幕、YouTube字幕、小红书帖子、Twitter推文、GitHub及雪球等全网社交媒体检索生态，提供极致高保真、零 API 费用的抓取检索工具！
 
-## 🌐 阶段 2.5：协议集成（MCP Tool）- **⚪ 待开发**
+### 📊 工具对比
 
-> 对应 tRPC-Agent-Go：MCP Tool 接入工具生态
-
-- [ ] **MCP Server 集成**：实现 Model Context Protocol 客户端，接入外部 MCP 工具服务
-- [ ] **MCP Tool 注册**：支持动态注册和发现 MCP 工具
-- [ ] **MCP 资源订阅**：支持订阅 MCP 提供的资源和提示模板
-- [ ] **MCP 传输层**：支持 stdio、HTTP SSE、WebSocket 三种传输方式
+| 功能 | 自研工具（已移除） | trpc-agent-go 内置工具（已集成） |
+|-----|-------------------|--------------------------------|
+| 计算器 | `calculator` | ❌ 无需（Claude Code ToolSet 的 Bash 可处理） |
+| 文件列表 | `list_directory` | ✅ `Glob` |
+| 文件读取 | `read_file` | ✅ `Read` |
+| 文件写入 | `write_file` | ✅ `Write` |
+| 文件编辑 | `edit_file` | ✅ `Edit` |
+| 文件模式搜索 | `glob_files` | ✅ `Glob` |
+| 内容搜索 | `grep_search` | ✅ `Grep` |
+| 网页搜索 | `web_search` | ✅ `duckduckgo` + `WebSearch` |
+| 网页抓取 | `web_scrape` | ✅ `WebFetch` |
+| HTTP 请求 | `http_request` | ✅ `Bash curl/wget` |
+| 命令执行 | `run_command` | ✅ `Bash` |
+| 任务管理 | ❌ 无 | ✅ `todo_write`, `todo_declare_blocker` |
 
 ---
 
@@ -105,7 +155,7 @@
 
 ---
 
-## 📊 阶段五：Prompt Caching 与成本优化 - **⚪ 待开发**
+## 🎯 阶段五：Prompt Caching 与成本优化 - **⚪ 待开发**
 
 > 对应 tRPC-Agent-Go：Prompt Caching，自动优化成本，缓存内容最高可节省 90%
 
@@ -116,7 +166,18 @@
 
 ---
 
-## 🎯 阶段六：GraphAgent 图工作流 - **⚪ 待开发**
+## 🎯 阶段 2.5：MCP Tool 集成 - **⚪ 待开发**
+
+> 对应 tRPC-Agent-Go：MCP Tool 接入工具生态
+
+- [ ] **MCP Server 集成**：实现 Model Context Protocol 客户端，接入外部 MCP 工具服务
+- [ ] **MCP Tool 注册**：支持动态注册和发现 MCP 工具
+- [ ] **MCP 资源订阅**：支持订阅 MCP 提供的资源和提示模板
+- [ ] **MCP 传输层**：支持 stdio、HTTP SSE、WebSocket 三种传输方式
+
+---
+
+## 🎨 阶段六：GraphAgent 图工作流 - **⚪ 待开发**
 
 > 对应 tRPC-Agent-Go：GraphAgent，类型安全的图工作流，支持多条件路由，功能对标 LangGraph
 
@@ -213,10 +274,10 @@
 
 ## 💾 全观测性与系统账单记录 - **✅ 已完成 (100%)**
 
-- [x] 建立多用户分片 Lazily Load 持久化隔离：按 X-User-Id 清洗物理路径，分用户 sessions_{userID}.json 物理文件分片落盘，任务列表 0 丢失
+- [x] 建立多用户分片 Lazily Load 持久化隔离：按 X-User-Id 清洗物理路径，分用户 sessions_{userID}.json 物理文件分片落盘
 - [x] 建立结构化黑匣子 I/O 调试日志 `bin/llm_io.log`，清晰归档每一次对话
 - [x] 建立全自动集成跑测脚本 `cmd/test_agent/main.go`，一键回归 100% SSE 多事件、格式、自愈通流
-- [x] 建立 Trae 风格三栏控制面板（包含 Todo 待办发光呼吸灯、Token 实时水位条以及自动渲染解包的百度/全网参考资料列表）
+- [x] 建立 Trae 风格三栏控制面板（包含 Todo 待办发光呼吸灯、Token 实时水位条以及自动渲染解包的参考资料列表）
 
 ---
 
@@ -241,3 +302,37 @@
 10. **A2A 协议** - Agent 互通
 11. **AG-UI 协议** - 前端动态渲染
 12. **Prompt Caching** - 成本优化
+
+---
+
+## 📝 日志目录结构
+
+所有日志文件已统一归档到 `bin/log/` 目录：
+
+```
+bin/
+├── trpc_agent_server.exe    # 服务程序
+└── log/
+    ├── server.log           # 服务启动日志
+    ├── llm_io.log           # LLM 请求/响应日志
+    └── token_stats.json     # Token 消耗统计
+```
+
+### 日志归档说明
+
+| 日志文件 | 内容 | 大小限制 |
+|---------|------|---------|
+| `server.log` | 服务启动信息、错误日志 | 建议定期清理 |
+| `llm_io.log` | 每次对话的完整请求/响应 JSON | 可能很大，建议定期归档 |
+| `token_stats.json` | Token 消耗记录 | 自动增长 |
+
+### 清理建议
+
+```bash
+# 清空日志文件（保留文件）
+> bin\log\server.log
+> bin\log\llm_io.log
+
+# 归档旧日志（按日期重命名）
+move bin\log\llm_io.log bin\log\llm_io_2026-06-26.log
+```

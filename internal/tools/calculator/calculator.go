@@ -4,6 +4,9 @@ package calculator
 import (
 	"context"
 	"fmt"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // Input 计算器工具的输入参数。
@@ -37,4 +40,13 @@ func Calculate(ctx context.Context, input Input) (Output, error) {
 		return Output{}, fmt.Errorf("不支持的运算类型: %s", input.Operation)
 	}
 	return Output{Result: result}, nil
+}
+
+// NewCalculatorTool 创建计算器函数工具。
+func NewCalculatorTool() tool.Tool {
+	return function.NewFunctionTool(
+		Calculate,
+		function.WithName("calculator"),
+		function.WithDescription("执行加减乘除运算"),
+	)
 }

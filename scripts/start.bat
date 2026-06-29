@@ -26,6 +26,9 @@ if "%OPENAI_API_KEY%"=="" (
 REM 确认 bin 目录存在
 if not exist bin mkdir bin
 
+REM 确认 bin/log 目录存在
+if not exist bin\log mkdir bin\log
+
 REM 解析端口
 set PORT=8080
 if not "%SERVER_ADDR%"=="" (
@@ -60,7 +63,7 @@ if !errorlevel! neq 0 (
 
 REM 后台启动服务（日志重定向到文件）
 echo [3/3] 启动 Web 服务...
-start "trpc_agent_server" /B bin\trpc_agent_server.exe > bin\server.log 2>&1
+start "trpc_agent_server" /B bin\trpc_agent_server.exe > bin\log\server.log 2>&1
 
 REM 等待服务就绪（用 ping 替代 timeout，避免输入重定向报错）
 echo 等待服务启动...
@@ -72,10 +75,10 @@ if !errorlevel!==0 (
     echo.
     echo [成功] Web 服务已启动！
     echo   访问地址: http://localhost:%PORT%
-    echo   日志文件: bin\server.log
+    echo   日志目录: bin\log\
     echo   停止服务: scripts\stop.bat
 ) else (
-    echo [警告] 服务可能未正常启动，请查看日志: bin\server.log
+    echo [警告] 服务可能未正常启动，请查看日志: bin\log\server.log
 )
 echo.
 endlocal

@@ -78,6 +78,8 @@ type TokenRecord struct {
 	CompletionTokens int    `json:"completion_tokens"`
 	TotalTokens      int    `json:"total_tokens"`
 	Timestamp        int64  `json:"timestamp"`
+	ReadableTime     string `json:"readable_time"`
+	Question         string `json:"question,omitempty"`
 }
 
 // ModelTokenStat 是按模型聚合的 token 统计。
@@ -548,8 +550,8 @@ chatDone:
 		lastUsage = realU
 	}
 
-	// 记录结构化调试与 I/O 日志到 bin/llm_io.log 中，极大方便后续开发和扫描定位
-	if logFile, err := os.OpenFile("bin/llm_io.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666); err == nil {
+	// 记录结构化调试与 I/O 日志到 bin/log/llm_io.log 中，极大方便后续开发和扫描定位
+	if logFile, err := os.OpenFile("bin/log/llm_io.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666); err == nil {
 		defer logFile.Close()
 		var logBuilder strings.Builder
 		logBuilder.WriteString("========================================================================\n")
@@ -598,6 +600,11 @@ chatDone:
 	if lastUsage != nil {
 		s.tokenMu.Lock()
 		s.tokenIDSeq++
+		now := time.Now()
+		question := req.Message
+		if len(question) > 200 {
+			question = question[:200] + "..."
+		}
 		record := TokenRecord{
 			ID:               s.tokenIDSeq,
 			SessionID:        sessionID,
@@ -605,7 +612,9 @@ chatDone:
 			PromptTokens:     lastUsage.PromptTokens,
 			CompletionTokens: lastUsage.CompletionTokens,
 			TotalTokens:      lastUsage.TotalTokens,
-			Timestamp:        time.Now().Unix(),
+			Timestamp:        now.Unix(),
+			ReadableTime:     now.Format("2006-01-02 15:04:05"),
+			Question:         question,
 		}
 		s.tokenRecords = append(s.tokenRecords, record)
 		s.saveTokenStatsLocked()
@@ -730,12 +739,12 @@ func (s *Server) handleSkills(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, s.skills)
 }
 
-// loadTokenStats 从 bin/token_stats.json 物理加载所有历史记录并自愈。
+// loadTokenStats 从 bin/log/token_stats.json 物理加载所有历史记录并自愈。
 func (s *Server) loadTokenStats() {
 	s.tokenMu.Lock()
 	defer s.tokenMu.Unlock()
 
-	data, err := os.ReadFile("bin/token_stats.json")
+	data, err := os.ReadFile("bin/log/token_stats.json")
 	if err != nil {
 		return
 	}
@@ -753,12 +762,12 @@ func (s *Server) loadTokenStats() {
 
 // saveTokenStatsLocked 将 tokenRecords 同步写入磁盘文件，防丢。调用时需持有 s.tokenMu 锁。
 func (s *Server) saveTokenStatsLocked() {
-	_ = os.MkdirAll("bin", 0755)
+	_ = os.MkdirAll("bin/log", 0755)
 	data, err := json.MarshalIndent(s.tokenRecords, "", "  ")
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile("bin/token_stats.json", data, 0666)
+	_ = os.WriteFile("bin/log/token_stats.json", data, 0666)
 }
 
 // handleTokenStats 返回 token 消耗统计。
